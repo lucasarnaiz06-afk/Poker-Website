@@ -9,15 +9,24 @@ import type { LobbyPresencePayload } from "@poker-platform/shared/types";
 import { Server, type Socket } from "socket.io";
 import { isCorsOriginAllowed } from "../http/cors";
 import { authenticateCookieHeader } from "../security/session";
+import {
+  TableRuntime,
+  type PlayerActionInput,
+  type PublicTableState,
+} from "../table-runtime";
 
 type ClientToServerEvents = {
   join_lobby: (payload: { lobbyId?: string }) => void;
   leave_lobby: (payload: { lobbyId?: string }) => void;
+  start_game: (payload: { lobbyId?: string }) => void;
+  player_action: (payload: ({ lobbyId?: string } & PlayerActionInput)) => void;
 };
 
 type ServerToClientEvents = {
   presence_update: (payload: LobbyPresencePayload) => void;
   lobby_error: (payload: { message: string }) => void;
+  table_error: (payload: { message: string; code: string }) => void;
+  game_state_update: (payload: PublicTableState) => void;
 };
 
 type InterServerEvents = Record<string, never>;
@@ -47,8 +56,8 @@ function getRoomName(lobbyId: string) {
   return `lobby:${lobbyId}`;
 }
 
-function readLobbyId(payload: { lobbyId?: string }) {
-  return typeof payload.lobbyId === "string" ? payload.lobbyId.trim() : "";
+function readLobbyId(payload?: { lobbyId?: string } | null) {
+  return typeof payload?.lobbyId === "string" ? payload.lobbyId.trim() : "";
 }
 
 function addPresence(lobbyId: string, userId: string) {
@@ -103,6 +112,22 @@ async function emitPresenceUpdate(io: LobbyServer, lobbyId: string) {
   });
 }
 
+async function joinLobbyRoom(
+  io: LobbyServer,
+  socket: LobbySocket,
+  lobbyId: string,
+) {
+  await getWaitingRoomLobbyForUser(lobbyId, socket.data.session.user.id);
+
+  if (!socket.data.lobbyIds.has(lobbyId)) {
+    socket.data.lobbyIds.add(lobbyId);
+    addPresence(lobbyId, socket.data.session.user.id);
+    socket.join(getRoomName(lobbyId));
+  }
+
+  await emitPresenceUpdate(io, lobbyId);
+}
+
 function leaveLobby(socket: LobbySocket, lobbyId: string) {
   if (!socket.data.lobbyIds.has(lobbyId)) {
     return false;
@@ -126,6 +151,20 @@ export function createSocketServer(httpServer: HttpServer) {
         callback(null, isCorsOriginAllowed(origin));
       },
       credentials: true,
+    },
+  });
+  const tableRuntime = new TableRuntime({
+    loadLobby: getLobbySummary,
+    async getRecipients(lobbyId) {
+      const roomSockets = await io.in(getRoomName(lobbyId)).fetchSockets();
+
+      return roomSockets.map((roomSocket) => ({
+        socketId: roomSocket.id,
+        userId: roomSocket.data.session.user.id,
+        emitGameState(payload) {
+          roomSocket.emit("game_state_update", payload);
+        },
+      }));
     },
   });
 
@@ -156,15 +195,11 @@ export function createSocketServer(httpServer: HttpServer) {
       }
 
       try {
-        await getWaitingRoomLobbyForUser(lobbyId, socket.data.session.user.id);
+        await joinLobbyRoom(io, socket, lobbyId);
 
-        if (!socket.data.lobbyIds.has(lobbyId)) {
-          socket.data.lobbyIds.add(lobbyId);
-          addPresence(lobbyId, socket.data.session.user.id);
-          socket.join(getRoomName(lobbyId));
+        if (tableRuntime.hasActiveTable(lobbyId)) {
+          await tableRuntime.broadcastTableState(lobbyId);
         }
-
-        await emitPresenceUpdate(io, lobbyId);
       } catch (error) {
         const message =
           error instanceof LobbyServiceError
@@ -183,6 +218,58 @@ export function createSocketServer(httpServer: HttpServer) {
       }
 
       void emitPresenceUpdate(io, lobbyId).catch(logPresenceError);
+    });
+
+    socket.on("start_game", async (payload) => {
+      const lobbyId = readLobbyId(payload);
+
+      if (!lobbyId) {
+        socket.emit("table_error", {
+          code: "INVALID_LOBBY_ID",
+          message: "Lobby ID is required.",
+        });
+        return;
+      }
+
+      try {
+        await joinLobbyRoom(io, socket, lobbyId);
+        await tableRuntime.startGame(lobbyId, socket.data.session.user.id);
+      } catch (error) {
+        const payload =
+          error instanceof LobbyServiceError
+            ? { code: error.code, message: error.message }
+            : tableRuntime.toErrorPayload(error);
+
+        socket.emit("table_error", payload);
+      }
+    });
+
+    socket.on("player_action", async (payload) => {
+      const lobbyId = readLobbyId(payload);
+
+      if (!lobbyId) {
+        socket.emit("table_error", {
+          code: "INVALID_LOBBY_ID",
+          message: "Lobby ID is required.",
+        });
+        return;
+      }
+
+      try {
+        await joinLobbyRoom(io, socket, lobbyId);
+        await tableRuntime.applyPlayerAction(
+          lobbyId,
+          socket.data.session.user.id,
+          payload,
+        );
+      } catch (error) {
+        const payload =
+          error instanceof LobbyServiceError
+            ? { code: error.code, message: error.message }
+            : tableRuntime.toErrorPayload(error);
+
+        socket.emit("table_error", payload);
+      }
     });
 
     socket.on("disconnect", () => {
