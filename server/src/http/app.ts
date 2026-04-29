@@ -1,6 +1,6 @@
 import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
-import { env } from "../config/env";
+import { corsOptions } from "./cors";
 import { healthRouter } from "./routes/health.routes";
 import { sessionRouter } from "./routes/session.routes";
 
@@ -17,12 +17,7 @@ export function createApp() {
 
   app.set("trust proxy", 1);
 
-  app.use(
-    cors({
-      origin: env.clientOrigin,
-      credentials: true,
-    }),
-  );
+  app.use(cors(corsOptions));
   app.use(express.json({ limit: "32kb" }));
 
   app.use("/health", healthRouter);

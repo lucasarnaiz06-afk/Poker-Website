@@ -1,8 +1,9 @@
 import { getWaitingRoomLobbyForUser, LobbyServiceError } from "@poker-platform/shared/lobbies";
-import { ArrowLeft, Lock, Users } from "lucide-react";
+import { ArrowLeft, Lock } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignOutButton } from "@/components/auth/sign-out-button";
+import { RealtimeWaitingRoom } from "@/components/lobby/realtime-waiting-room";
 import { requireCurrentSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
@@ -59,50 +60,11 @@ export default async function WaitingRoomPage({ params }: WaitingRoomPageProps) 
           <SignOutButton />
         </header>
 
-        <section className="grid gap-4 md:grid-cols-4">
-          <Metric label="Players" value={`${lobby.playerCount}/${lobby.maxPlayers}`} />
-          <Metric label="Blinds" value={`${lobby.smallBlind}/${lobby.bigBlind}`} />
-          <Metric label="Min buy-in" value={String(lobby.minBuyIn)} />
-          <Metric label="Max buy-in" value={String(lobby.maxBuyIn)} />
-        </section>
-
-        <section className="rounded-lg border border-zinc-200 bg-white">
-          <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4">
-            <h2 className="text-lg font-semibold text-zinc-950">Waiting Room</h2>
-            <Users className="h-5 w-5 text-zinc-500" aria-hidden="true" />
-          </div>
-          <div className="divide-y divide-zinc-200">
-            {lobby.players.map((player) => (
-              <div
-                key={player.id}
-                className="grid gap-3 px-5 py-4 md:grid-cols-[80px_minmax(0,1fr)_120px] md:items-center"
-              >
-                <div className="text-sm font-semibold text-zinc-950">
-                  Seat {player.seatNumber ?? "-"}
-                </div>
-                <div>
-                  <p className="font-medium text-zinc-950">
-                    {player.name || player.email || "Player"}
-                  </p>
-                  <p className="mt-1 text-sm text-zinc-600">{player.email}</p>
-                </div>
-                <div className="text-sm font-semibold text-zinc-700">
-                  Stack {player.stack ?? lobby.minBuyIn}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <RealtimeWaitingRoom
+          initialLobby={lobby}
+          currentUserId={session.user.id}
+        />
       </div>
     </main>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-4">
-      <p className="text-sm text-zinc-600">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-zinc-950">{value}</p>
-    </div>
   );
 }

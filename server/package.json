@@ -12,7 +12,9 @@
     "@poker-platform/shared": "0.1.0",
     "@prisma/client": "^6.0.0",
     "cors": "^2.8.5",
-    "express": "^4.19.0"
+    "dotenv": "^16.6.1",
+    "express": "^4.19.0",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.0",
