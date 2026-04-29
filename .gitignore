@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# build outputs
+.next/
+dist/
+build/
+out/
+coverage/
+
+# logs and caches
+*.log
+*.tsbuildinfo
+
+# macOS
+.DS_Store
+._*
+
+# local database artifacts
+server/prisma/migrations/dev.db
