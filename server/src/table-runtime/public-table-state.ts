@@ -1,24 +1,7 @@
-import type {
-  Card,
-  PlayerSnapshot,
-  PokerStateSnapshot,
-} from "../poker-engine";
+import type { PublicTableState } from "@poker-platform/shared/types";
+import type { PokerStateSnapshot } from "../poker-engine";
 
-export type PublicTablePlayer = Omit<PlayerSnapshot, "holeCards"> & {
-  holeCards: Card[];
-  hasHiddenHoleCards: boolean;
-  isViewer: boolean;
-};
-
-export type PublicTableState = Omit<
-  PokerStateSnapshot,
-  "players" | "deckCount" | "burnedCards"
-> & {
-  lobbyId: string;
-  viewerPlayerId: string;
-  burnedCardCount: number;
-  players: PublicTablePlayer[];
-};
+export type { PublicTableState } from "@poker-platform/shared/types";
 
 export function sanitizeTableStateForPlayer(
   lobbyId: string,

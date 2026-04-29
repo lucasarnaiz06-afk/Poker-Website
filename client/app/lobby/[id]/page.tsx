@@ -3,7 +3,7 @@ import { ArrowLeft, Lock } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { SignOutButton } from "@/components/auth/sign-out-button";
-import { RealtimeWaitingRoom } from "@/components/lobby/realtime-waiting-room";
+import { PokerTable } from "@/components/lobby/poker-table";
 import { requireCurrentSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export default async function WaitingRoomPage({ params }: WaitingRoomPageProps) 
 
   return (
     <main className="min-h-screen px-6 py-8">
-      <div className="mx-auto flex max-w-5xl flex-col gap-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6">
         <header className="flex flex-col gap-4 border-b border-zinc-200 pb-6 md:flex-row md:items-center md:justify-between">
           <div>
             <Link
@@ -60,7 +60,7 @@ export default async function WaitingRoomPage({ params }: WaitingRoomPageProps) 
           <SignOutButton />
         </header>
 
-        <RealtimeWaitingRoom
+        <PokerTable
           initialLobby={lobby}
           currentUserId={session.user.id}
         />
