@@ -1,4 +1,10 @@
-import type { LobbySummary } from "@poker-platform/shared/types";
+import type {
+  LobbySummary,
+  PublicCard,
+  PublicHandCompletePayload,
+  PublicHandCompleteWinner,
+  PublicPotAward,
+} from "@poker-platform/shared/types";
 import {
   PokerEngine,
   PokerEngineError,
@@ -24,17 +30,42 @@ export type TableRuntimeRecipient = {
   socketId: string;
   userId: string;
   emitGameState: (payload: PublicTableState) => void | Promise<void>;
+  emitHandComplete?: (payload: PublicHandCompletePayload) => void | Promise<void>;
+};
+
+export type PersistCompletedHandInput = {
+  lobbyId: string;
+  handNumber: number;
+  potSize: number;
+  winnerUserIds: string[];
+  winningHandName: string | null;
+  winningHandDescription: string | null;
+  board: PublicCard[];
+  awards: PublicPotAward[];
+  showdownHands: PokerStateSnapshot["showdownHands"];
+  completedAt: Date;
+  playerStacks: Array<{
+    userId: string;
+    chipStack: number;
+  }>;
 };
 
 export type TableRuntimeOptions = {
   loadLobby: (lobbyId: string) => Promise<LobbySummary | null>;
   getRecipients: (lobbyId: string) => Promise<TableRuntimeRecipient[]>;
   deckProvider?: (lobby: LobbySummary) => readonly Card[];
+  activateLobby?: (lobbyId: string) => Promise<void>;
+  persistCompletedHand?: (input: PersistCompletedHandInput) => Promise<void>;
+  onLobbyUpdated?: (lobbyId: string) => Promise<void>;
+  handRestartDelayMs?: number;
 };
 
 type ActiveTable = {
   lobbyId: string;
+  lobby: LobbySummary;
   engine: PokerEngine;
+  handNumber: number;
+  lastHandCompletePayload?: PublicHandCompletePayload;
   startedByUserId: string;
   createdAt: Date;
   updatedAt: Date;
@@ -46,6 +77,13 @@ const ACTION_TYPES = new Set<PlayerActionType>([
   "call",
   "raise",
 ]);
+
+const TERMINAL_PHASES = new Set<PokerStateSnapshot["phase"]>([
+  "SHOWDOWN",
+  "COMPLETE",
+]);
+
+const DEFAULT_HAND_RESTART_DELAY_MS = 1800;
 
 export class TableRuntimeError extends Error {
   constructor(
@@ -128,6 +166,84 @@ function getRuntimeErrorMessage(error: unknown) {
   return "Table runtime action failed.";
 }
 
+function delay(milliseconds: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function isTerminalState(state: PokerStateSnapshot) {
+  return TERMINAL_PHASES.has(state.phase);
+}
+
+function canStartNextHand(state: PokerStateSnapshot) {
+  return state.players.filter((player) => player.stack > 0).length >= 2;
+}
+
+function getPlayerName(lobby: LobbySummary, playerId: string) {
+  const lobbyPlayer = lobby.players.find((player) => player.userId === playerId);
+
+  return lobbyPlayer?.name ?? lobbyPlayer?.email ?? null;
+}
+
+function buildWinnerSummaries(
+  lobby: LobbySummary,
+  awards: readonly PublicPotAward[],
+) {
+  const winnersById = new Map<string, PublicHandCompleteWinner>();
+
+  for (const award of awards) {
+    if (award.winnerIds.length === 0) {
+      continue;
+    }
+
+    const share = Math.floor(award.amount / award.winnerIds.length);
+    let remainder = award.amount % award.winnerIds.length;
+
+    for (const playerId of award.winnerIds) {
+      const existingWinner = winnersById.get(playerId);
+      const extraChip = remainder > 0 ? 1 : 0;
+      const amount = share + extraChip;
+
+      remainder -= extraChip;
+
+      winnersById.set(playerId, {
+        playerId,
+        name: getPlayerName(lobby, playerId),
+        amount: (existingWinner?.amount ?? 0) + amount,
+        handName: existingWinner?.handName ?? award.handName,
+        handDescription:
+          existingWinner?.handDescription ?? award.handDescription,
+      });
+    }
+  }
+
+  return [...winnersById.values()];
+}
+
+function buildHandCompletePayload(
+  table: ActiveTable,
+  state: PokerStateSnapshot,
+  completedAt: Date,
+  nextHandInMs: number | null,
+): PublicHandCompletePayload {
+  const awards = state.pot.awards;
+  const firstNamedAward =
+    awards.find((award) => award.handName || award.handDescription) ?? awards[0];
+
+  return {
+    lobbyId: table.lobbyId,
+    handNumber: table.handNumber,
+    potSize: awards.reduce((total, award) => total + award.amount, 0),
+    completedAt: completedAt.toISOString(),
+    winningHandName: firstNamedAward?.handName ?? null,
+    winningHandDescription: firstNamedAward?.handDescription ?? null,
+    winners: buildWinnerSummaries(table.lobby, awards),
+    awards,
+    nextHandInMs,
+  };
+}
+
 export class TableRuntime {
   private readonly tables = new Map<string, ActiveTable>();
 
@@ -171,12 +287,15 @@ export class TableRuntime {
 
     const table: ActiveTable = {
       lobbyId,
+      lobby,
       engine: buildEngineFromLobby(lobby, this.options.deckProvider?.(lobby)),
+      handNumber: 1,
       startedByUserId: requestedByUserId,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
+    await this.options.activateLobby?.(lobbyId);
     this.tables.set(lobbyId, table);
 
     console.log("[table-runtime] game started", {
@@ -185,6 +304,7 @@ export class TableRuntime {
     });
 
     await this.broadcastTableState(lobbyId);
+    await this.options.onLobbyUpdated?.(lobbyId);
 
     return table.engine.getState();
   }
@@ -217,9 +337,30 @@ export class TableRuntime {
       phase: state.phase,
     });
 
+    if (isTerminalState(state)) {
+      await this.completeHand(table, state);
+      return state;
+    }
+
     await this.broadcastTableState(lobbyId);
 
     return state;
+  }
+
+  async emitTableStateToRecipient(
+    lobbyId: string,
+    recipient: TableRuntimeRecipient,
+  ) {
+    const table = this.requireTable(lobbyId);
+    const state = table.engine.getState();
+
+    await recipient.emitGameState(
+      sanitizeTableStateForPlayer(lobbyId, state, recipient.userId),
+    );
+
+    if (table.lastHandCompletePayload) {
+      await recipient.emitHandComplete?.(table.lastHandCompletePayload);
+    }
   }
 
   async broadcastTableState(lobbyId: string) {
@@ -238,6 +379,81 @@ export class TableRuntime {
     });
 
     return recipients.length;
+  }
+
+  private async completeHand(table: ActiveTable, state: PokerStateSnapshot) {
+    const completedAt = new Date();
+    const restartDelayMs = canStartNextHand(state)
+      ? (this.options.handRestartDelayMs ?? DEFAULT_HAND_RESTART_DELAY_MS)
+      : null;
+    const payload = buildHandCompletePayload(
+      table,
+      state,
+      completedAt,
+      restartDelayMs,
+    );
+
+    table.lastHandCompletePayload = payload;
+
+    await this.options.persistCompletedHand?.({
+      lobbyId: table.lobbyId,
+      handNumber: table.handNumber,
+      potSize: payload.potSize,
+      winnerUserIds: payload.winners.map((winner) => winner.playerId),
+      winningHandName: payload.winningHandName,
+      winningHandDescription: payload.winningHandDescription,
+      board: state.board,
+      awards: state.pot.awards,
+      showdownHands: state.showdownHands,
+      completedAt,
+      playerStacks: state.players.map((player) => ({
+        userId: player.id,
+        chipStack: player.stack,
+      })),
+    });
+
+    await this.broadcastTableState(table.lobbyId);
+    await this.emitHandComplete(table.lobbyId, payload);
+    await this.options.onLobbyUpdated?.(table.lobbyId);
+
+    if (restartDelayMs === null) {
+      return;
+    }
+
+    if (restartDelayMs > 0) {
+      await delay(restartDelayMs);
+    }
+
+    table.handNumber += 1;
+    table.lastHandCompletePayload = undefined;
+    table.engine.startHand({
+      deck: this.options.deckProvider?.(table.lobby),
+    });
+    table.updatedAt = new Date();
+
+    await this.broadcastTableState(table.lobbyId);
+
+    console.log("[table-runtime] next hand started", {
+      lobbyId: table.lobbyId,
+      handNumber: table.handNumber,
+    });
+  }
+
+  private async emitHandComplete(
+    lobbyId: string,
+    payload: PublicHandCompletePayload,
+  ) {
+    const recipients = await this.options.getRecipients(lobbyId);
+
+    for (const recipient of recipients) {
+      await recipient.emitHandComplete?.(payload);
+    }
+
+    console.log("[table-runtime] emitted hand_complete", {
+      lobbyId,
+      handNumber: payload.handNumber,
+      recipients: recipients.length,
+    });
   }
 
   toErrorPayload(error: unknown) {

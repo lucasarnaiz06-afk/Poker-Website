@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import type { AuthenticatedUser } from "../auth/session";
 import type {
@@ -10,6 +11,23 @@ import type {
 import { hashPassword, verifyPassword } from "./passwords";
 
 const ACTIVE_PLAYER_STATUSES = ["JOINED", "SEATED"] as const;
+
+export type PersistCompletedHandInput = {
+  lobbyId: string;
+  handNumber: number;
+  potSize: number;
+  winnerUserIds: string[];
+  winningHandName: string | null;
+  winningHandDescription: string | null;
+  board: Prisma.InputJsonValue;
+  awards: Prisma.InputJsonValue;
+  showdownHands: Prisma.InputJsonValue;
+  completedAt: Date;
+  playerStacks: Array<{
+    userId: string;
+    chipStack: number;
+  }>;
+};
 
 type LobbyWithPlayers = NonNullable<
   Awaited<ReturnType<typeof findLobbyWithPlayers>>
@@ -170,7 +188,7 @@ function toPlayerSummary(
     name: player.user.name,
     email: player.user.email,
     seatNumber: player.seatNumber,
-    stack: player.stack,
+    stack: player.chipStack,
     status: player.status,
     joinedAt: player.joinedAt.toISOString(),
   };
@@ -282,7 +300,7 @@ export async function createLobbyForUser(
         lobbyId: createdLobby.id,
         userId: user.id,
         seatNumber: 1,
-        stack: input.minBuyIn,
+        chipStack: input.minBuyIn,
         status: "JOINED",
       },
     });
@@ -380,12 +398,12 @@ export async function joinLobbyForUser(
         lobbyId: lobby.id,
         userId: user.id,
         seatNumber,
-        stack: lobby.minBuyIn,
+        chipStack: lobby.minBuyIn,
         status: "JOINED",
       },
       update: {
         seatNumber,
-        stack: existingPlayer?.stack ?? lobby.minBuyIn,
+        chipStack: existingPlayer?.chipStack ?? lobby.minBuyIn,
         status: "JOINED",
         leftAt: null,
       },
@@ -393,4 +411,60 @@ export async function joinLobbyForUser(
   });
 
   return getWaitingRoomLobbyForUser(lobby.id, user.id);
+}
+
+export async function markLobbyActive(lobbyId: string) {
+  await prisma.lobby.update({
+    where: { id: lobbyId },
+    data: {
+      status: "ACTIVE",
+    },
+  });
+}
+
+export async function persistCompletedHand(input: PersistCompletedHandInput) {
+  await prisma.$transaction(async (tx) => {
+    for (const playerStack of input.playerStacks) {
+      await tx.lobbyPlayer.updateMany({
+        where: {
+          lobbyId: input.lobbyId,
+          userId: playerStack.userId,
+        },
+        data: {
+          chipStack: playerStack.chipStack,
+        },
+      });
+    }
+
+    await tx.handHistory.upsert({
+      where: {
+        lobbyId_handNumber: {
+          lobbyId: input.lobbyId,
+          handNumber: input.handNumber,
+        },
+      },
+      create: {
+        lobbyId: input.lobbyId,
+        handNumber: input.handNumber,
+        potSize: input.potSize,
+        winnerUserIds: input.winnerUserIds,
+        winningHandName: input.winningHandName,
+        winningHandDescription: input.winningHandDescription,
+        board: input.board,
+        awards: input.awards,
+        showdownHands: input.showdownHands,
+        completedAt: input.completedAt,
+      },
+      update: {
+        potSize: input.potSize,
+        winnerUserIds: input.winnerUserIds,
+        winningHandName: input.winningHandName,
+        winningHandDescription: input.winningHandDescription,
+        board: input.board,
+        awards: input.awards,
+        showdownHands: input.showdownHands,
+        completedAt: input.completedAt,
+      },
+    });
+  });
 }

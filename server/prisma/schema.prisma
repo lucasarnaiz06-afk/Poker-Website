@@ -93,6 +93,7 @@ model Lobby {
 
   createdBy User          @relation("LobbyCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   players   LobbyPlayer[]
+  hands     HandHistory[]
 
   @@index([status, visibility])
   @@index([createdByUserId])
@@ -103,7 +104,7 @@ model LobbyPlayer {
   lobbyId    String
   userId     String
   seatNumber Int?
-  stack      Int?
+  chipStack Int?
   status     LobbyPlayerStatus @default(JOINED)
   joinedAt   DateTime          @default(now())
   leftAt     DateTime?
@@ -114,6 +115,25 @@ model LobbyPlayer {
   @@unique([lobbyId, userId])
   @@unique([lobbyId, seatNumber])
   @@index([userId])
+}
+
+model HandHistory {
+  id                     String   @id @default(cuid())
+  lobbyId                String
+  handNumber             Int
+  potSize                Int
+  winnerUserIds          String[]
+  winningHandName        String?
+  winningHandDescription String?
+  board                  Json
+  awards                 Json
+  showdownHands          Json
+  completedAt            DateTime @default(now())
+
+  lobby Lobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+
+  @@unique([lobbyId, handNumber])
+  @@index([lobbyId, completedAt])
 }
 
 enum LobbyVisibility {

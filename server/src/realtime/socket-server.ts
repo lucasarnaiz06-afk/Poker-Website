@@ -4,8 +4,13 @@ import {
   getLobbySummary,
   getWaitingRoomLobbyForUser,
   LobbyServiceError,
+  markLobbyActive,
+  persistCompletedHand,
 } from "@poker-platform/shared/lobbies";
-import type { LobbyPresencePayload } from "@poker-platform/shared/types";
+import type {
+  LobbyPresencePayload,
+  PublicHandCompletePayload,
+} from "@poker-platform/shared/types";
 import { Server, type Socket } from "socket.io";
 import { isCorsOriginAllowed } from "../http/cors";
 import { authenticateCookieHeader } from "../security/session";
@@ -27,6 +32,7 @@ type ServerToClientEvents = {
   lobby_error: (payload: { message: string }) => void;
   table_error: (payload: { message: string; code: string }) => void;
   game_state_update: (payload: PublicTableState) => void;
+  hand_complete: (payload: PublicHandCompletePayload) => void;
 };
 
 type InterServerEvents = Record<string, never>;
@@ -155,6 +161,11 @@ export function createSocketServer(httpServer: HttpServer) {
   });
   const tableRuntime = new TableRuntime({
     loadLobby: getLobbySummary,
+    activateLobby: markLobbyActive,
+    persistCompletedHand,
+    onLobbyUpdated(lobbyId) {
+      return emitPresenceUpdate(io, lobbyId);
+    },
     async getRecipients(lobbyId) {
       const roomSockets = await io.in(getRoomName(lobbyId)).fetchSockets();
 
@@ -163,6 +174,9 @@ export function createSocketServer(httpServer: HttpServer) {
         userId: roomSocket.data.session.user.id,
         emitGameState(payload) {
           roomSocket.emit("game_state_update", payload);
+        },
+        emitHandComplete(payload) {
+          roomSocket.emit("hand_complete", payload);
         },
       }));
     },
@@ -198,7 +212,16 @@ export function createSocketServer(httpServer: HttpServer) {
         await joinLobbyRoom(io, socket, lobbyId);
 
         if (tableRuntime.hasActiveTable(lobbyId)) {
-          await tableRuntime.broadcastTableState(lobbyId);
+          await tableRuntime.emitTableStateToRecipient(lobbyId, {
+            socketId: socket.id,
+            userId: socket.data.session.user.id,
+            emitGameState(payload) {
+              socket.emit("game_state_update", payload);
+            },
+            emitHandComplete(payload) {
+              socket.emit("hand_complete", payload);
+            },
+          });
         }
       } catch (error) {
         const message =

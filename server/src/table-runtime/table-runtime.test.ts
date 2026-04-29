@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import type { LobbySummary } from "@poker-platform/shared/types";
+import type {
+  LobbySummary,
+  PublicHandCompletePayload,
+} from "@poker-platform/shared/types";
 import {
   cardToNotation,
   createDeck,
@@ -9,6 +12,7 @@ import {
 import {
   TableRuntime,
   TableRuntimeError,
+  type PersistCompletedHandInput,
   type PublicTableState,
   type TableRuntimeRecipient,
 } from "./index";
@@ -76,6 +80,9 @@ function createLobby(): LobbySummary {
 function createRuntimeHarness(deck: readonly Card[]) {
   const lobby = createLobby();
   const emittedStates = new Map<string, PublicTableState[]>();
+  const handCompletePayloads = new Map<string, PublicHandCompletePayload[]>();
+  const persistedHands: PersistCompletedHandInput[] = [];
+  const activatedLobbyIds: string[] = [];
   const recipients: TableRuntimeRecipient[] = lobby.players.map((player) => ({
     socketId: `socket-${player.userId}`,
     userId: player.userId,
@@ -85,14 +92,34 @@ function createRuntimeHarness(deck: readonly Card[]) {
       states.push(payload);
       emittedStates.set(player.userId, states);
     },
+    emitHandComplete(payload) {
+      const payloads = handCompletePayloads.get(player.userId) ?? [];
+
+      payloads.push(payload);
+      handCompletePayloads.set(player.userId, payloads);
+    },
   }));
   const runtime = new TableRuntime({
     loadLobby: async (lobbyId) => (lobbyId === lobby.id ? lobby : null),
     getRecipients: async () => recipients,
     deckProvider: () => deck,
+    activateLobby: async (lobbyId) => {
+      activatedLobbyIds.push(lobbyId);
+    },
+    persistCompletedHand: async (input) => {
+      persistedHands.push(input);
+    },
+    handRestartDelayMs: 0,
   });
 
-  return { lobby, runtime, emittedStates };
+  return {
+    activatedLobbyIds,
+    handCompletePayloads,
+    lobby,
+    persistedHands,
+    runtime,
+    emittedStates,
+  };
 }
 
 function latestState(
@@ -194,7 +221,79 @@ async function testPlayerActionBroadcastsSanitizedState() {
   );
 }
 
+async function testCompletedHandPersistsAndRestarts() {
+  const { lobby, runtime, persistedHands, handCompletePayloads, activatedLobbyIds } =
+    createRuntimeHarness(
+      deckWithTopCards([
+        "As", // Bob, seat 2
+        "8h", // Carol, seat 3
+        "9h", // Alice, seat 1
+        "Ks", // Bob
+        "8d", // Carol
+        "9d", // Alice
+        "4c", // flop burn
+        "Qs",
+        "Js",
+        "Ts",
+        "5c", // turn burn
+        "2d",
+        "6c", // river burn
+        "3c",
+      ]),
+    );
+
+  await runtime.startGame(lobby.id, "alice");
+  assert.deepEqual(activatedLobbyIds, [lobby.id]);
+
+  await runtime.applyPlayerAction(lobby.id, "alice", { action: "call" });
+  await runtime.applyPlayerAction(lobby.id, "bob", { action: "call" });
+  await runtime.applyPlayerAction(lobby.id, "carol", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "bob", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "carol", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "alice", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "bob", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "carol", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "alice", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "bob", { action: "check" });
+  await runtime.applyPlayerAction(lobby.id, "carol", { action: "check" });
+  const terminalState = await runtime.applyPlayerAction(lobby.id, "alice", {
+    action: "check",
+  });
+
+  assert.equal(terminalState.phase, "SHOWDOWN");
+  assert.equal(persistedHands.length, 1);
+  assert.equal(persistedHands[0].handNumber, 1);
+  assert.equal(persistedHands[0].potSize, 60);
+  assert.deepEqual(persistedHands[0].winnerUserIds, ["bob"]);
+  assert.deepEqual(
+    persistedHands[0].playerStacks.map((player) => [
+      player.userId,
+      player.chipStack,
+    ]),
+    [
+      ["alice", 980],
+      ["bob", 140],
+      ["carol", 980],
+    ],
+  );
+
+  const bobPayload = handCompletePayloads.get("bob")?.at(-1);
+
+  assert.ok(bobPayload && typeof bobPayload === "object");
+  assert.deepEqual(bobPayload.winners, [
+    {
+      playerId: "bob",
+      name: "Bob",
+      amount: 60,
+      handName: "Straight Flush",
+      handDescription: "Royal Flush",
+    },
+  ]);
+  assert.equal(runtime.getTableState(lobby.id).phase, "PRE_FLOP");
+}
+
 await testCreatorAuthorization();
 await testPlayerActionBroadcastsSanitizedState();
+await testCompletedHandPersistsAndRestarts();
 
 console.log("Table runtime mock socket test passed.");

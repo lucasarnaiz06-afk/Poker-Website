@@ -43,6 +43,14 @@ export type PublicPotAward = {
   handDescription: string | null;
 };
 
+export type PublicHandCompleteWinner = {
+  playerId: string;
+  name: string | null;
+  amount: number;
+  handName: string | null;
+  handDescription: string | null;
+};
+
 export type PublicTablePlayer = {
   id: string;
   seat: number;
@@ -83,4 +91,16 @@ export type PublicTableState = {
     rank: number;
   }>;
   players: PublicTablePlayer[];
+};
+
+export type PublicHandCompletePayload = {
+  lobbyId: string;
+  handNumber: number;
+  potSize: number;
+  completedAt: string;
+  winningHandName: string | null;
+  winningHandDescription: string | null;
+  winners: PublicHandCompleteWinner[];
+  awards: PublicPotAward[];
+  nextHandInMs: number | null;
 };

@@ -4,6 +4,7 @@ import type {
   LobbyPresencePayload,
   LobbySummary,
   PublicCard,
+  PublicHandCompletePayload,
   PublicTablePlayer,
   PublicTableState,
 } from "@poker-platform/shared/types";
@@ -29,6 +30,7 @@ type ServerToClientEvents = {
   lobby_error: (payload: { message: string }) => void;
   table_error: (payload: { message: string; code: string }) => void;
   game_state_update: (payload: PublicTableState) => void;
+  hand_complete: (payload: PublicHandCompletePayload) => void;
 };
 
 type ClientToServerEvents = {
@@ -116,6 +118,34 @@ function getPlayerDisplayName(
   const lobbyPlayer = lobby.players.find((player) => player.userId === userId);
 
   return lobbyPlayer?.name || lobbyPlayer?.email || fallback;
+}
+
+function getWinnerName(winner: PublicHandCompletePayload["winners"][number]) {
+  return winner.name ?? "Player";
+}
+
+function getHandCompleteTitle(payload: PublicHandCompletePayload) {
+  if (payload.winners.length === 0) {
+    return "Hand complete";
+  }
+
+  if (payload.winners.length === 1) {
+    const winner = payload.winners[0];
+
+    return `${getWinnerName(winner)} wins ${formatChips(winner.amount)}`;
+  }
+
+  return `${payload.winners.map(getWinnerName).join(", ")} split ${formatChips(
+    payload.potSize,
+  )}`;
+}
+
+function getHandCompleteSubtitle(payload: PublicHandCompletePayload) {
+  const handDescription =
+    payload.winners.find((winner) => winner.handDescription)?.handDescription ??
+    payload.winningHandDescription;
+
+  return handDescription ? `with ${handDescription}` : "wins the pot";
 }
 
 function getConnectionLabel(status: ConnectionStatus) {
@@ -255,6 +285,8 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
     useState<ConnectionStatus>("connecting");
   const [socketError, setSocketError] = useState<string | null>(null);
   const [tableError, setTableError] = useState<string | null>(null);
+  const [handComplete, setHandComplete] =
+    useState<PublicHandCompletePayload | null>(null);
   const [raiseTo, setRaiseTo] = useState("");
 
   const onlineUsers = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
@@ -351,6 +383,14 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
       setTableError(null);
     });
 
+    socket.on("hand_complete", (payload) => {
+      if (payload.lobbyId !== initialLobby.id) {
+        return;
+      }
+
+      setHandComplete(payload);
+    });
+
     socket.connect();
 
     return () => {
@@ -359,6 +399,20 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
       socketRef.current = null;
     };
   }, [initialLobby.id]);
+
+  useEffect(() => {
+    if (!handComplete) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setHandComplete(null);
+    }, 3200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [handComplete]);
 
   useEffect(() => {
     if (!isLocalTurn) {
@@ -469,6 +523,7 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
             <div className="min-w-0">
               <SeatRow seats={arrangedSeats.top} />
               <TableFelt
+                handComplete={handComplete}
                 tableState={tableState}
                 activeTurnName={activeTurnName}
               />
@@ -651,9 +706,11 @@ function HoleCards({ seat }: { seat: SeatView }) {
 }
 
 function TableFelt({
+  handComplete,
   tableState,
   activeTurnName,
 }: {
+  handComplete: PublicHandCompletePayload | null;
   tableState: PublicTableState | null;
   activeTurnName: string | null;
 }) {
@@ -662,6 +719,16 @@ function TableFelt({
   return (
     <div className="relative overflow-hidden rounded-[44px] border border-emerald-200/20 bg-[radial-gradient(circle_at_center,#167044_0%,#0f5136_48%,#063528_100%)] px-4 py-8 shadow-inner shadow-black/50 md:px-8 md:py-10">
       <div className="absolute inset-5 rounded-[36px] border border-white/10" />
+      {handComplete ? (
+        <div className="absolute inset-x-4 top-5 z-20 mx-auto max-w-md rounded-lg border border-amber-200/60 bg-zinc-950/90 px-4 py-3 text-left shadow-2xl shadow-black/40 backdrop-blur">
+          <p className="text-sm font-semibold text-amber-100">
+            {getHandCompleteTitle(handComplete)}
+          </p>
+          <p className="mt-1 text-sm text-zinc-100">
+            {getHandCompleteSubtitle(handComplete)}
+          </p>
+        </div>
+      ) : null}
       <div className="relative z-10 flex min-h-[300px] flex-col items-center justify-center gap-6 text-center">
         <div className="inline-flex items-center gap-3 rounded-lg border border-amber-200/30 bg-zinc-950/55 px-4 py-3 shadow-lg">
           <CircleDollarSign className="h-5 w-5 text-amber-200" aria-hidden="true" />
