@@ -95,15 +95,7 @@ function getSocketUrl() {
     return configuredUrl;
   }
 
-  if (typeof window === "undefined") {
-    return "http://localhost:4000";
-  }
-
-  const host = window.location.hostname.includes(":")
-    ? `[${window.location.hostname}]`
-    : window.location.hostname;
-
-  return `${window.location.protocol}//${host}:4000`;
+  return null;
 }
 
 function formatChips(value: number) {
@@ -320,13 +312,17 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
   const arrangedSeats = useMemo(() => arrangeSeats(seats), [seats]);
 
   useEffect(() => {
-    const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(
-      getSocketUrl(),
-      {
-        autoConnect: false,
-        withCredentials: true,
-      },
-    );
+    const socketUrl = getSocketUrl();
+    const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
+      socketUrl
+        ? io(socketUrl, {
+            autoConnect: false,
+            withCredentials: true,
+          })
+        : io({
+            autoConnect: false,
+            withCredentials: true,
+          });
 
     socketRef.current = socket;
 

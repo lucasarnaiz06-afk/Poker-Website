@@ -32,15 +32,7 @@ function getSocketUrl() {
     return configuredUrl;
   }
 
-  if (typeof window === "undefined") {
-    return "http://localhost:4000";
-  }
-
-  const host = window.location.hostname.includes(":")
-    ? `[${window.location.hostname}]`
-    : window.location.hostname;
-
-  return `${window.location.protocol}//${host}:4000`;
+  return null;
 }
 
 function getConnectionLabel(status: ConnectionStatus) {
@@ -79,13 +71,17 @@ export function RealtimeWaitingRoom({
   const onlineUsers = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
 
   useEffect(() => {
-    const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(
-      getSocketUrl(),
-      {
-        autoConnect: false,
-        withCredentials: true,
-      },
-    );
+    const socketUrl = getSocketUrl();
+    const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
+      socketUrl
+        ? io(socketUrl, {
+            autoConnect: false,
+            withCredentials: true,
+          })
+        : io({
+            autoConnect: false,
+            withCredentials: true,
+          });
 
     function joinLobby() {
       socket.emit("join_lobby", { lobbyId: initialLobby.id });

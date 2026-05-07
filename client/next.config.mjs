@@ -16,6 +16,23 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS ??
       "university.edu",
   },
+  async rewrites() {
+    const socketUrl =
+      process.env.SOCKET_SERVER_URL?.trim() ||
+      process.env.NEXT_PUBLIC_SOCKET_URL?.trim() ||
+      "http://localhost:4000";
+
+    return [
+      {
+        source: "/socket.io",
+        destination: `${socketUrl}/socket.io/`,
+      },
+      {
+        source: "/socket.io/:path*",
+        destination: `${socketUrl}/socket.io/:path*`,
+      },
+    ];
+  },
   transpilePackages: ["@poker-platform/shared"],
 };
 
