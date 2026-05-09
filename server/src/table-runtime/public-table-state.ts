@@ -8,6 +8,12 @@ export function sanitizeTableStateForPlayer(
   state: PokerStateSnapshot,
   viewerPlayerId: string,
 ): PublicTableState {
+  const showdownPlayerIds = new Set(
+    state.phase === "SHOWDOWN"
+      ? state.showdownHands.map((hand) => hand.playerId)
+      : [],
+  );
+
   return {
     lobbyId,
     viewerPlayerId,
@@ -25,11 +31,13 @@ export function sanitizeTableStateForPlayer(
     showdownHands: state.showdownHands,
     players: state.players.map((player) => {
       const isViewer = player.id === viewerPlayerId;
+      const shouldRevealHoleCards =
+        isViewer || showdownPlayerIds.has(player.id);
 
       return {
         ...player,
-        holeCards: isViewer ? player.holeCards : [],
-        hasHiddenHoleCards: !isViewer && player.holeCards.length > 0,
+        holeCards: shouldRevealHoleCards ? player.holeCards : [],
+        hasHiddenHoleCards: !shouldRevealHoleCards && player.holeCards.length > 0,
         isViewer,
       };
     }),

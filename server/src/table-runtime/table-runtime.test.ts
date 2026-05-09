@@ -222,25 +222,31 @@ async function testPlayerActionBroadcastsSanitizedState() {
 }
 
 async function testCompletedHandPersistsAndRestarts() {
-  const { lobby, runtime, persistedHands, handCompletePayloads, activatedLobbyIds } =
-    createRuntimeHarness(
-      deckWithTopCards([
-        "As", // Bob, seat 2
-        "8h", // Carol, seat 3
-        "9h", // Alice, seat 1
-        "Ks", // Bob
-        "8d", // Carol
-        "9d", // Alice
-        "4c", // flop burn
-        "Qs",
-        "Js",
-        "Ts",
-        "5c", // turn burn
-        "2d",
-        "6c", // river burn
-        "3c",
-      ]),
-    );
+  const {
+    lobby,
+    runtime,
+    persistedHands,
+    handCompletePayloads,
+    activatedLobbyIds,
+    emittedStates,
+  } = createRuntimeHarness(
+    deckWithTopCards([
+      "As", // Bob, seat 2
+      "8h", // Carol, seat 3
+      "9h", // Alice, seat 1
+      "Ks", // Bob
+      "8d", // Carol
+      "9d", // Alice
+      "4c", // flop burn
+      "Qs",
+      "Js",
+      "Ts",
+      "5c", // turn burn
+      "2d",
+      "6c", // river burn
+      "3c",
+    ]),
+  );
 
   await runtime.startGame(lobby.id, "alice");
   assert.deepEqual(activatedLobbyIds, [lobby.id]);
@@ -261,6 +267,23 @@ async function testCompletedHandPersistsAndRestarts() {
   });
 
   assert.equal(terminalState.phase, "SHOWDOWN");
+  const aliceShowdownState = (emittedStates.get("alice") ?? []).find(
+    (state) => state.phase === "SHOWDOWN",
+  );
+
+  assert.ok(aliceShowdownState, "Expected a showdown state emitted to Alice.");
+  assert.deepEqual(
+    aliceShowdownState.players.map((player) => [
+      player.id,
+      player.holeCards.map(cardToNotation),
+      player.hasHiddenHoleCards,
+    ]),
+    [
+      ["alice", ["9h", "9d"], false],
+      ["bob", ["As", "Ks"], false],
+      ["carol", ["8h", "8d"], false],
+    ],
+  );
   assert.equal(persistedHands.length, 1);
   assert.equal(persistedHands[0].handNumber, 1);
   assert.equal(persistedHands[0].potSize, 60);

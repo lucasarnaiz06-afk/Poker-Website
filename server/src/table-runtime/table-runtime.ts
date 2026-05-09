@@ -83,7 +83,7 @@ const TERMINAL_PHASES = new Set<PokerStateSnapshot["phase"]>([
   "COMPLETE",
 ]);
 
-const DEFAULT_HAND_RESTART_DELAY_MS = 1800;
+const DEFAULT_HAND_RESTART_DELAY_MS = 4500;
 
 export class TableRuntimeError extends Error {
   constructor(

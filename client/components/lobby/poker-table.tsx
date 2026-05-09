@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   Play,
   Radio,
+  Trophy,
   Wifi,
   WifiOff,
   X,
@@ -65,8 +66,14 @@ type SeatView = {
   allIn: boolean;
   inHand: boolean;
   isViewer: boolean;
+  isRevealed: boolean;
   isTurn: boolean;
   isOnline: boolean;
+};
+
+type QuickBetTarget = {
+  label: string;
+  totalBet: number;
 };
 
 const chipFormatter = new Intl.NumberFormat("en-US");
@@ -194,6 +201,10 @@ function buildSeatViews({
         allIn: player.allIn,
         inHand: player.inHand,
         isViewer: player.isViewer,
+        isRevealed:
+          tableState.phase === "SHOWDOWN" &&
+          !player.isViewer &&
+          player.holeCards.length > 0,
         isTurn: tableState.currentTurnPlayerId === player.id,
         isOnline:
           onlineUserIds.has(player.id) ||
@@ -218,6 +229,7 @@ function buildSeatViews({
       allIn: false,
       inHand: false,
       isViewer: player.userId === currentUserId,
+      isRevealed: false,
       isTurn: false,
       isOnline:
         onlineUserIds.has(player.userId) ||
@@ -266,6 +278,48 @@ function getDefaultRaiseTo(
   return String(Math.min(minimumRaiseTo, maximumRaiseTo));
 }
 
+function clampBetTarget(totalBet: number, maximumRaiseTo: number) {
+  return Math.max(1, Math.min(totalBet, maximumRaiseTo));
+}
+
+function getQuickBetTargets(
+  tableState: PublicTableState | null,
+  viewer: PublicTablePlayer | null,
+): QuickBetTarget[] {
+  if (!tableState || !viewer || viewer.stack <= 0) {
+    return [];
+  }
+
+  const maximumRaiseTo = viewer.currentBet + viewer.stack;
+  const amountToCall = Math.max(0, tableState.currentBet - viewer.currentBet);
+  const minimumRaiseTo = tableState.currentBet + tableState.minRaise;
+  const potAfterCall = tableState.pot.total + amountToCall;
+  const halfPotRaiseTo =
+    tableState.currentBet + Math.floor(potAfterCall / 2);
+  const potRaiseTo = tableState.currentBet + potAfterCall;
+
+  return [
+    {
+      label: "1/2 Pot",
+      totalBet: clampBetTarget(
+        Math.max(minimumRaiseTo, halfPotRaiseTo),
+        maximumRaiseTo,
+      ),
+    },
+    {
+      label: "Pot",
+      totalBet: clampBetTarget(
+        Math.max(minimumRaiseTo, potRaiseTo),
+        maximumRaiseTo,
+      ),
+    },
+    {
+      label: "All-In",
+      totalBet: maximumRaiseTo,
+    },
+  ].filter((target) => target.totalBet > tableState.currentBet);
+}
+
 export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(
     null,
@@ -295,6 +349,10 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
     tableState && viewer
       ? Math.max(0, tableState.currentBet - viewer.currentBet)
       : 0;
+  const quickBetTargets = useMemo(
+    () => getQuickBetTargets(tableState, viewer),
+    [tableState, viewer],
+  );
   const activeTurnName = tableState?.currentTurnPlayerId
     ? getPlayerDisplayName(lobby, tableState.currentTurnPlayerId)
     : null;
@@ -403,7 +461,7 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
 
     const timeoutId = window.setTimeout(() => {
       setHandComplete(null);
-    }, 3200);
+    }, 5200);
 
     return () => {
       window.clearTimeout(timeoutId);
@@ -465,6 +523,10 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
     }
 
     emitPlayerAction("raise", totalBet);
+  }
+
+  function handleQuickBet(totalBet: number) {
+    setRaiseTo(String(totalBet));
   }
 
   return (
@@ -538,9 +600,11 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
           isLocalTurn={isLocalTurn}
           onCheckOrCall={handleCheckOrCall}
           onFold={() => emitPlayerAction("fold")}
+          onQuickBet={handleQuickBet}
           onRaiseSubmit={handleRaiseSubmit}
           onStartGame={handleStartGame}
           raiseTo={raiseTo}
+          quickBetTargets={quickBetTargets}
           setRaiseTo={setRaiseTo}
           tableState={tableState}
           viewer={viewer}
@@ -601,6 +665,8 @@ function PlayerSeat({ seat }: { seat: SeatView }) {
       className={`rounded-lg border p-3 shadow-lg transition ${
         seat.isTurn
           ? "border-amber-300 bg-amber-100 text-zinc-950 shadow-amber-950/20"
+          : seat.isRevealed
+            ? "border-amber-300/70 bg-amber-950/80 text-white shadow-amber-950/30"
           : seat.isViewer
             ? "border-cyan-300/50 bg-cyan-950/70 text-white"
             : "border-white/10 bg-white/10 text-white"
@@ -674,7 +740,7 @@ function SeatStat({
 }
 
 function HoleCards({ seat }: { seat: SeatView }) {
-  if (seat.isViewer && seat.holeCards.length > 0) {
+  if (seat.holeCards.length > 0) {
     return (
       <>
         {seat.holeCards.map((card) => (
@@ -716,13 +782,21 @@ function TableFelt({
     <div className="relative overflow-hidden rounded-[44px] border border-emerald-200/20 bg-[radial-gradient(circle_at_center,#167044_0%,#0f5136_48%,#063528_100%)] px-4 py-8 shadow-inner shadow-black/50 md:px-8 md:py-10">
       <div className="absolute inset-5 rounded-[36px] border border-white/10" />
       {handComplete ? (
-        <div className="absolute inset-x-4 top-5 z-20 mx-auto max-w-md rounded-lg border border-amber-200/60 bg-zinc-950/90 px-4 py-3 text-left shadow-2xl shadow-black/40 backdrop-blur">
-          <p className="text-sm font-semibold text-amber-100">
-            {getHandCompleteTitle(handComplete)}
-          </p>
-          <p className="mt-1 text-sm text-zinc-100">
-            {getHandCompleteSubtitle(handComplete)}
-          </p>
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-zinc-950/65 p-4 backdrop-blur-sm">
+          <div className="max-w-lg animate-[winner-pop_260ms_ease-out] rounded-lg border border-amber-200 bg-zinc-950 px-6 py-5 text-center shadow-2xl shadow-black/60">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-md bg-amber-400 text-zinc-950">
+              <Trophy className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <p className="text-xs font-semibold uppercase text-amber-200">
+              Hand Complete
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-white">
+              {getHandCompleteTitle(handComplete)}
+            </p>
+            <p className="mt-2 text-base font-medium text-zinc-100">
+              {getHandCompleteSubtitle(handComplete)}
+            </p>
+          </div>
         </div>
       ) : null}
       <div className="relative z-10 flex min-h-[300px] flex-col items-center justify-center gap-6 text-center">
@@ -780,7 +854,7 @@ function PlayingCard({
   if (hidden) {
     return (
       <div
-        className={`${sizeClasses} flex shrink-0 items-center justify-center rounded-md border border-cyan-200/30 bg-[linear-gradient(135deg,#0f172a_0%,#0f766e_100%)] p-1 shadow-md`}
+        className={`${sizeClasses} flex shrink-0 animate-[deal-card_220ms_ease-out] items-center justify-center rounded-md border border-cyan-200/30 bg-[linear-gradient(135deg,#0f172a_0%,#0f766e_100%)] p-1 shadow-md transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:animate-none`}
       >
         <div className="h-full w-full rounded border border-white/20 bg-white/10" />
       </div>
@@ -790,7 +864,7 @@ function PlayingCard({
   if (!card || placeholder) {
     return (
       <div
-        className={`${sizeClasses} shrink-0 rounded-md border border-dashed border-white/20 bg-white/10 shadow-inner`}
+        className={`${sizeClasses} shrink-0 rounded-md border border-dashed border-white/20 bg-white/10 shadow-inner transition-colors duration-200`}
       />
     );
   }
@@ -802,7 +876,7 @@ function PlayingCard({
     <div
       className={`${sizeClasses} flex shrink-0 flex-col justify-between rounded-md border border-zinc-200 bg-white p-1.5 font-bold shadow-md ${
         isRed ? "text-rose-600" : "text-zinc-950"
-      }`}
+      } animate-[deal-card_220ms_ease-out] transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:animate-none`}
     >
       <span className="leading-none">{rank}</span>
       <span className="self-center text-xl leading-none md:text-2xl">
@@ -821,9 +895,11 @@ function ActionPanel({
   isLocalTurn,
   onCheckOrCall,
   onFold,
+  onQuickBet,
   onRaiseSubmit,
   onStartGame,
   raiseTo,
+  quickBetTargets,
   setRaiseTo,
   tableState,
   viewer,
@@ -835,9 +911,11 @@ function ActionPanel({
   isLocalTurn: boolean;
   onCheckOrCall: () => void;
   onFold: () => void;
+  onQuickBet: (totalBet: number) => void;
   onRaiseSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onStartGame: () => void;
   raiseTo: string;
+  quickBetTargets: QuickBetTarget[];
   setRaiseTo: (value: string) => void;
   tableState: PublicTableState | null;
   viewer: PublicTablePlayer | null;
@@ -846,6 +924,14 @@ function ActionPanel({
     ? tableState.currentBet + tableState.minRaise
     : undefined;
   const maximumRaiseTo = viewer ? viewer.currentBet + viewer.stack : undefined;
+  const canRaise =
+    Boolean(tableState) &&
+    typeof maximumRaiseTo === "number" &&
+    maximumRaiseTo > (tableState?.currentBet ?? 0);
+  const inputMinimum =
+    minimumRaiseTo && maximumRaiseTo
+      ? Math.min(minimumRaiseTo, maximumRaiseTo)
+      : minimumRaiseTo;
 
   return (
     <aside className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
@@ -910,20 +996,35 @@ function ActionPanel({
             >
               Raise to
             </label>
+            {quickBetTargets.length > 0 ? (
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {quickBetTargets.map((target) => (
+                  <button
+                    key={target.label}
+                    type="button"
+                    onClick={() => onQuickBet(target.totalBet)}
+                    className="h-9 rounded-md border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-800 transition hover:border-emerald-700 hover:text-emerald-800"
+                  >
+                    {target.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="mt-2 flex gap-2">
               <input
                 id="raise-to"
                 type="number"
-                min={minimumRaiseTo}
+                min={inputMinimum}
                 max={maximumRaiseTo}
                 step={1}
                 value={raiseTo}
+                disabled={!canRaise}
                 onChange={(event) => setRaiseTo(event.target.value)}
-                className="h-11 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-950 outline-none transition focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/20"
+                className="h-11 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-950 outline-none transition focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/20 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
               />
               <button
                 type="submit"
-                disabled={!isConnected}
+                disabled={!isConnected || !canRaise}
                 className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-amber-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-300"
               >
                 <ArrowUp className="h-4 w-4" aria-hidden="true" />

@@ -369,8 +369,9 @@ export class PokerEngine {
 
     const raiseSize = totalBet - this.currentBet;
     const minimumRaise = this.currentBet === 0 ? this.bigBlind : this.minRaise;
+    const isAllInRaise = totalBet === maximumTotalBet;
 
-    if (raiseSize < minimumRaise) {
+    if (raiseSize < minimumRaise && !isAllInRaise) {
       throw new PokerEngineError(
         "RAISE_TOO_SMALL",
         `Raise must increase the bet by at least ${minimumRaise}.`,
@@ -379,11 +380,14 @@ export class PokerEngine {
 
     this.commitChips(player, totalBet - player.currentBet);
     this.currentBet = totalBet;
-    this.minRaise = raiseSize;
 
-    for (const otherPlayer of this.remainingContenders()) {
-      if (otherPlayer.id !== player.id && !otherPlayer.allIn) {
-        otherPlayer.hasActed = false;
+    if (raiseSize >= minimumRaise) {
+      this.minRaise = raiseSize;
+
+      for (const otherPlayer of this.remainingContenders()) {
+        if (otherPlayer.id !== player.id && !otherPlayer.allIn) {
+          otherPlayer.hasActed = false;
+        }
       }
     }
 
@@ -594,14 +598,10 @@ export class PokerEngine {
       return true;
     }
 
-    const actionablePlayers = contenders.filter((player) => !player.allIn);
-
-    if (actionablePlayers.length <= 1) {
-      return true;
-    }
-
-    return actionablePlayers.every(
-      (player) => player.hasActed && player.currentBet === this.currentBet,
+    return contenders.every(
+      (player) =>
+        player.allIn ||
+        (player.hasActed && player.currentBet === this.currentBet),
     );
   }
 

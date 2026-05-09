@@ -6,6 +6,7 @@ import {
   shuffleDeck,
   type Card,
 } from "./cards";
+import { evaluateHoldemHand, findWinningEvaluations } from "./hand-evaluator";
 import { PokerEngine, PokerEngineError } from "./poker-engine";
 
 function deckWithTopCards(topCards: string[]) {
@@ -177,7 +178,172 @@ function testSimulatedSidePotShowdown() {
   assert.equal(getPlayerStack(state, "carol"), 800);
 }
 
+function testAllInBetStillRequiresNextPlayerToCall() {
+  const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20 });
+  const deck: Card[] = deckWithTopCards([
+    "Ah", // Bob, seat 2
+    "Ks", // Alice, seat 1
+    "Ad", // Bob
+    "Kc", // Alice
+    "2s", // flop burn
+    "7h",
+    "4d",
+    "2c",
+    "3s", // turn burn
+    "9c",
+    "5s", // river burn
+    "Qd",
+  ]);
+
+  engine.addPlayer({ id: "alice", seat: 1, stack: 1000 });
+  engine.addPlayer({ id: "bob", seat: 2, stack: 100 });
+
+  let state = engine.startHand({ buttonSeat: 1, deck });
+
+  state = engine.call("alice");
+  assert.equal(state.currentTurnPlayerId, "bob");
+  state = engine.check("bob");
+  assert.equal(state.phase, "FLOP");
+  assert.equal(state.currentTurnPlayerId, "bob");
+
+  state = engine.raise("bob", 80);
+  assert.equal(state.phase, "FLOP");
+  assert.equal(state.currentTurnPlayerId, "alice");
+  assert.equal(state.players.find((player) => player.id === "bob")?.allIn, true);
+  assert.equal(state.players.find((player) => player.id === "alice")?.currentBet, 0);
+
+  state = engine.call("alice");
+  assert.equal(state.phase, "SHOWDOWN");
+  assert.deepEqual(state.board.map(cardToNotation), [
+    "7h",
+    "4d",
+    "2c",
+    "9c",
+    "Qd",
+  ]);
+}
+
+function testShortAllInRaiseStillRequiresRemainingAction() {
+  const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20 });
+  const deck: Card[] = deckWithTopCards([
+    "Ah", // Bob, seat 2
+    "Qs", // Carol, seat 3
+    "Ks", // Alice, seat 1
+    "Ad", // Bob
+    "Qd", // Carol
+    "Kc", // Alice
+    "2s", // flop burn
+    "7h",
+    "4d",
+    "2c",
+    "3s", // turn burn
+    "9c",
+    "5s", // river burn
+    "Td",
+  ]);
+
+  engine.addPlayer({ id: "alice", seat: 1, stack: 1000 });
+  engine.addPlayer({ id: "bob", seat: 2, stack: 130 });
+  engine.addPlayer({ id: "carol", seat: 3, stack: 1000 });
+
+  let state = engine.startHand({ buttonSeat: 1, deck });
+
+  state = engine.call("alice");
+  state = engine.call("bob");
+  state = engine.check("carol");
+  assert.equal(state.phase, "FLOP");
+  assert.equal(state.currentTurnPlayerId, "bob");
+
+  state = engine.check("bob");
+  state = engine.check("carol");
+  state = engine.raise("alice", 100);
+  assert.equal(state.currentTurnPlayerId, "bob");
+
+  state = engine.raise("bob", 110);
+  assert.equal(state.phase, "FLOP");
+  assert.equal(state.currentTurnPlayerId, "carol");
+  assert.equal(state.players.find((player) => player.id === "bob")?.allIn, true);
+
+  state = engine.call("carol");
+  assert.equal(state.phase, "FLOP");
+  assert.equal(state.currentTurnPlayerId, "alice");
+
+  state = engine.call("alice");
+  assert.equal(state.phase, "TURN");
+  assert.equal(state.currentTurnPlayerId, "carol");
+}
+
+function testRiverCheckStillGivesInPositionPlayerAction() {
+  const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20 });
+  const deck: Card[] = deckWithTopCards([
+    "Ah", // Bob, seat 2
+    "Ks", // Alice, seat 1
+    "Qd", // Bob
+    "Jc", // Alice
+    "2s", // flop burn
+    "7h",
+    "4d",
+    "2c",
+    "3s", // turn burn
+    "9c",
+    "5s", // river burn
+    "Td",
+  ]);
+
+  engine.addPlayer({ id: "alice", seat: 1, stack: 1000 });
+  engine.addPlayer({ id: "bob", seat: 2, stack: 1000 });
+
+  let state = engine.startHand({ buttonSeat: 1, deck });
+
+  state = engine.call("alice");
+  state = engine.check("bob");
+  state = engine.check("bob");
+  state = engine.check("alice");
+  state = engine.check("bob");
+  state = engine.check("alice");
+
+  assert.equal(state.phase, "RIVER");
+  assert.equal(state.currentTurnPlayerId, "bob");
+
+  state = engine.check("bob");
+  assert.equal(state.phase, "RIVER");
+  assert.equal(state.currentTurnPlayerId, "alice");
+
+  state = engine.check("alice");
+  assert.equal(state.phase, "SHOWDOWN");
+}
+
+function testFlushBeatsStraight() {
+  const straight = evaluateHoldemHand("straight", [
+    "As",
+    "Kd",
+    "Qc",
+    "Jh",
+    "Ts",
+    "2c",
+    "3d",
+  ].map(parseCardNotation));
+  const flush = evaluateHoldemHand("flush", [
+    "Ah",
+    "Qh",
+    "8h",
+    "4h",
+    "2h",
+    "Kc",
+    "3d",
+  ].map(parseCardNotation));
+
+  assert.deepEqual(
+    findWinningEvaluations([straight, flush]).map((hand) => hand.playerId),
+    ["flush"],
+  );
+}
+
 testDeck();
 testSimulatedSidePotShowdown();
+testAllInBetStillRequiresNextPlayerToCall();
+testShortAllInRaiseStillRequiresRemainingAction();
+testRiverCheckStillGivesInPositionPlayerAction();
+testFlushBeatsStraight();
 
 console.log("Poker engine tests passed.");
