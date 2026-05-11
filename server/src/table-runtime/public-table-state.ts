@@ -7,6 +7,10 @@ export function sanitizeTableStateForPlayer(
   lobbyId: string,
   state: PokerStateSnapshot,
   viewerPlayerId: string,
+  tableMeta: Pick<PublicTableState, "actionLog" | "handHistory"> = {
+    actionLog: [],
+    handHistory: [],
+  },
 ): PublicTableState {
   const showdownPlayerIds = new Set(
     state.phase === "SHOWDOWN"
@@ -29,6 +33,8 @@ export function sanitizeTableStateForPlayer(
     burnedCardCount: state.burnedCards.length,
     pot: state.pot,
     showdownHands: state.showdownHands,
+    actionLog: tableMeta.actionLog,
+    handHistory: tableMeta.handHistory,
     players: state.players.map((player) => {
       const isViewer = player.id === viewerPlayerId;
       const shouldRevealHoleCards =

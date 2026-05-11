@@ -190,6 +190,10 @@ async function testPlayerActionBroadcastsSanitizedState() {
   assert.equal(aliceState.currentTurnPlayerId, "bob");
   assert.equal(bobState.currentBet, 200);
   assert.equal(carolState.currentBet, 200);
+  assert.deepEqual(
+    aliceState.actionLog.map((event) => event.message),
+    ["Hand 1 started. Dealing pre-flop.", "Alice raised to 200."],
+  );
 
   for (const state of [aliceState, bobState, carolState]) {
     assertNoPrivateDeckFields(state);
@@ -284,6 +288,17 @@ async function testCompletedHandPersistsAndRestarts() {
       ["carol", ["8h", "8d"], false],
     ],
   );
+  assert.deepEqual(
+    aliceShowdownState.actionLog.map((event) => event.message).slice(-3),
+    [
+      "Alice checked.",
+      "Showdown. Revealing live hands.",
+      "Bob wins 60 with Royal Flush.",
+    ],
+  );
+  assert.deepEqual(aliceShowdownState.handHistory.map((hand) => hand.handNumber), [
+    1,
+  ]);
   assert.equal(persistedHands.length, 1);
   assert.equal(persistedHands[0].handNumber, 1);
   assert.equal(persistedHands[0].potSize, 60);
@@ -313,6 +328,14 @@ async function testCompletedHandPersistsAndRestarts() {
     },
   ]);
   assert.equal(runtime.getTableState(lobby.id).phase, "PRE_FLOP");
+  const bobRestartState = latestState(emittedStates, "bob");
+
+  assert.equal(bobRestartState.phase, "PRE_FLOP");
+  assert.deepEqual(
+    bobRestartState.actionLog.map((event) => event.message),
+    ["Hand 2 started. Dealing pre-flop."],
+  );
+  assert.deepEqual(bobRestartState.handHistory.map((hand) => hand.handNumber), [1]);
 }
 
 await testCreatorAuthorization();

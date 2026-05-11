@@ -4,17 +4,25 @@ import type {
   LobbyPresencePayload,
   LobbySummary,
   PublicCard,
+  PublicGameLogEntry,
   PublicHandCompletePayload,
+  PublicHandHistoryEntry,
   PublicTablePlayer,
   PublicTableState,
 } from "@poker-platform/shared/types";
 import {
+  getRealtimeSocketOptions,
+  getRealtimeSocketUrl,
+} from "@/lib/realtime-socket";
+import {
   ArrowUp,
   Check,
   CircleDollarSign,
+  History,
   LoaderCircle,
   Play,
   Radio,
+  ScrollText,
   Trophy,
   Wifi,
   WifiOff,
@@ -94,16 +102,6 @@ const suitSymbols: Record<PublicCard["suit"], string> = {
   h: "\u2665",
   s: "\u2660",
 };
-
-function getSocketUrl() {
-  const configuredUrl = process.env.NEXT_PUBLIC_SOCKET_URL?.trim();
-
-  if (configuredUrl) {
-    return configuredUrl;
-  }
-
-  return null;
-}
 
 function formatChips(value: number) {
   return chipFormatter.format(value);
@@ -370,17 +368,12 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
   const arrangedSeats = useMemo(() => arrangeSeats(seats), [seats]);
 
   useEffect(() => {
-    const socketUrl = getSocketUrl();
+    const socketUrl = getRealtimeSocketUrl();
+    const socketOptions = getRealtimeSocketOptions();
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
       socketUrl
-        ? io(socketUrl, {
-            autoConnect: false,
-            withCredentials: true,
-          })
-        : io({
-            autoConnect: false,
-            withCredentials: true,
-          });
+        ? io(socketUrl, socketOptions)
+        : io(socketOptions);
 
     socketRef.current = socket;
 
@@ -550,8 +543,8 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
         </div>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="rounded-lg border border-zinc-900 bg-zinc-950 p-4 text-white shadow-2xl shadow-zinc-950/20">
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="rounded-lg border border-zinc-900 bg-[radial-gradient(circle_at_top,#1f2937_0%,#09090b_52%,#030712_100%)] p-4 text-white shadow-2xl shadow-zinc-950/30 md:p-5 xl:p-6">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-semibold tracking-normal">Table</h2>
@@ -575,7 +568,7 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
             </span>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)_220px] lg:items-center">
+          <div className="grid gap-4 lg:grid-cols-[230px_minmax(520px,1fr)_230px] lg:items-center 2xl:grid-cols-[260px_minmax(620px,1fr)_260px]">
             <SeatColumn seats={arrangedSeats.left} />
 
             <div className="min-w-0">
@@ -592,23 +585,27 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
           </div>
         </div>
 
-        <ActionPanel
-          amountToCall={amountToCall}
-          hasStarted={hasStarted}
-          isConnected={isConnected}
-          isHost={isHost}
-          isLocalTurn={isLocalTurn}
-          onCheckOrCall={handleCheckOrCall}
-          onFold={() => emitPlayerAction("fold")}
-          onQuickBet={handleQuickBet}
-          onRaiseSubmit={handleRaiseSubmit}
-          onStartGame={handleStartGame}
-          raiseTo={raiseTo}
-          quickBetTargets={quickBetTargets}
-          setRaiseTo={setRaiseTo}
-          tableState={tableState}
-          viewer={viewer}
-        />
+        <div className="grid gap-4 xl:sticky xl:top-4 xl:self-start">
+          <ActionPanel
+            amountToCall={amountToCall}
+            hasStarted={hasStarted}
+            isConnected={isConnected}
+            isHost={isHost}
+            isLocalTurn={isLocalTurn}
+            onCheckOrCall={handleCheckOrCall}
+            onFold={() => emitPlayerAction("fold")}
+            onQuickBet={handleQuickBet}
+            onRaiseSubmit={handleRaiseSubmit}
+            onStartGame={handleStartGame}
+            raiseTo={raiseTo}
+            quickBetTargets={quickBetTargets}
+            setRaiseTo={setRaiseTo}
+            tableState={tableState}
+            viewer={viewer}
+          />
+          <ActionLogPanel events={tableState?.actionLog ?? []} />
+          <HandHistoryPanel hands={tableState?.handHistory ?? []} />
+        </div>
       </section>
     </>
   );
@@ -629,7 +626,7 @@ function SeatColumn({ seats }: { seats: SeatView[] }) {
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-4 xl:gap-5">
       {seats.map((seat) => (
         <PlayerSeat key={seat.id} seat={seat} />
       ))}
@@ -643,7 +640,7 @@ function SeatRow({ seats }: { seats: SeatView[] }) {
   }
 
   return (
-    <div className="my-3 grid gap-3 sm:grid-cols-2">
+    <div className="my-4 grid gap-3 sm:grid-cols-2 xl:my-5 xl:gap-5">
       {seats.map((seat) => (
         <PlayerSeat key={seat.id} seat={seat} />
       ))}
@@ -662,14 +659,14 @@ function PlayerSeat({ seat }: { seat: SeatView }) {
 
   return (
     <div
-      className={`rounded-lg border p-3 shadow-lg transition ${
+      className={`relative rounded-lg border p-3 shadow-lg transition duration-200 ${
         seat.isTurn
-          ? "border-amber-300 bg-amber-100 text-zinc-950 shadow-amber-950/20"
+          ? "animate-[active-seat-glow_1.7s_ease-in-out_infinite] border-amber-300 bg-amber-100 text-zinc-950 shadow-[0_0_28px_rgba(251,191,36,0.55)] ring-2 ring-amber-300/80"
           : seat.isRevealed
             ? "border-amber-300/70 bg-amber-950/80 text-white shadow-amber-950/30"
           : seat.isViewer
-            ? "border-cyan-300/50 bg-cyan-950/70 text-white"
-            : "border-white/10 bg-white/10 text-white"
+            ? "border-cyan-300/50 bg-cyan-950/70 text-white shadow-cyan-950/30"
+            : "border-white/10 bg-white/[0.08] text-white"
       } ${seat.folded ? "opacity-70" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
@@ -779,8 +776,8 @@ function TableFelt({
   const boardCards = tableState?.board ?? [];
 
   return (
-    <div className="relative overflow-hidden rounded-[44px] border border-emerald-200/20 bg-[radial-gradient(circle_at_center,#167044_0%,#0f5136_48%,#063528_100%)] px-4 py-8 shadow-inner shadow-black/50 md:px-8 md:py-10">
-      <div className="absolute inset-5 rounded-[36px] border border-white/10" />
+    <div className="relative overflow-hidden rounded-[44px] border border-emerald-200/20 bg-[radial-gradient(circle_at_center,#167044_0%,#0f5136_48%,#063528_100%)] px-4 py-9 shadow-[inset_0_0_70px_rgba(0,0,0,0.45)] md:px-8 md:py-12 xl:rounded-[58px] xl:px-10 xl:py-14">
+      <div className="absolute inset-5 rounded-[36px] border border-white/10 xl:inset-7 xl:rounded-[48px]" />
       {handComplete ? (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-zinc-950/65 p-4 backdrop-blur-sm">
           <div className="max-w-lg animate-[winner-pop_260ms_ease-out] rounded-lg border border-amber-200 bg-zinc-950 px-6 py-5 text-center shadow-2xl shadow-black/60">
@@ -799,7 +796,7 @@ function TableFelt({
           </div>
         </div>
       ) : null}
-      <div className="relative z-10 flex min-h-[300px] flex-col items-center justify-center gap-6 text-center">
+      <div className="relative z-10 flex min-h-[320px] flex-col items-center justify-center gap-7 text-center xl:min-h-[390px]">
         <div className="inline-flex items-center gap-3 rounded-lg border border-amber-200/30 bg-zinc-950/55 px-4 py-3 shadow-lg">
           <CircleDollarSign className="h-5 w-5 text-amber-200" aria-hidden="true" />
           <div className="text-left">
@@ -812,7 +809,7 @@ function TableFelt({
           </div>
         </div>
 
-        <div className="flex flex-wrap justify-center gap-2 md:gap-3">
+        <div className="flex flex-wrap justify-center gap-2 md:gap-3 xl:gap-4">
           {Array.from({ length: 5 }).map((_, index) => (
             <PlayingCard
               key={index}
@@ -887,6 +884,123 @@ function PlayingCard({
   );
 }
 
+function formatLogTime(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
+function getLogToneClasses(tone: PublicGameLogEntry["tone"]) {
+  if (tone === "award") {
+    return "border-amber-300/30 bg-amber-400/10 text-amber-100";
+  }
+
+  if (tone === "showdown") {
+    return "border-cyan-300/30 bg-cyan-400/10 text-cyan-100";
+  }
+
+  if (tone === "deal") {
+    return "border-emerald-300/30 bg-emerald-400/10 text-emerald-100";
+  }
+
+  return "border-white/10 bg-white/[0.06] text-zinc-100";
+}
+
+function ActionLogPanel({ events }: { events: PublicGameLogEntry[] }) {
+  const visibleEvents = events.slice(-18);
+
+  return (
+    <aside className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-white shadow-xl shadow-zinc-950/20">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Action Log</h2>
+          <p className="mt-1 text-sm text-zinc-400">Current hand</p>
+        </div>
+        <div className="rounded-md bg-zinc-900 p-2 text-emerald-200">
+          <ScrollText className="h-5 w-5" aria-hidden="true" />
+        </div>
+      </div>
+
+      <div className="mt-4 max-h-64 space-y-2 overflow-y-auto pr-1">
+        {visibleEvents.length > 0 ? (
+          visibleEvents.map((event) => (
+            <div
+              key={event.id}
+              className={`rounded-md border px-3 py-2 text-sm ${getLogToneClasses(
+                event.tone,
+              )}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p className="leading-5">{event.message}</p>
+                <time className="shrink-0 text-xs text-zinc-400">
+                  {formatLogTime(event.at)}
+                </time>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm text-zinc-400">
+            No actions yet
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function HandHistoryPanel({ hands }: { hands: PublicHandHistoryEntry[] }) {
+  return (
+    <aside className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-white shadow-xl shadow-zinc-950/20">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Hand History</h2>
+          <p className="mt-1 text-sm text-zinc-400">Last 3 hands</p>
+        </div>
+        <div className="rounded-md bg-zinc-900 p-2 text-amber-200">
+          <History className="h-5 w-5" aria-hidden="true" />
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {hands.length > 0 ? (
+          hands.map((hand) => {
+            const winnerText =
+              hand.winners.length > 0
+                ? hand.winners
+                    .map((winner) => winner.name ?? "Player")
+                    .join(", ")
+                : "No winner";
+            const handText =
+              hand.winningHandDescription ?? hand.winningHandName ?? "Pot awarded";
+
+            return (
+              <div
+                key={hand.handNumber}
+                className="rounded-md border border-white/10 bg-white/[0.06] p-3 text-sm"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-semibold text-white">Hand {hand.handNumber}</p>
+                  <p className="text-xs font-semibold text-amber-200">
+                    {formatChips(hand.potSize)}
+                  </p>
+                </div>
+                <p className="mt-2 text-zinc-200">{winnerText}</p>
+                <p className="mt-1 text-xs text-zinc-400">{handText}</p>
+              </div>
+            );
+          })
+        ) : (
+          <div className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm text-zinc-400">
+            No completed hands yet
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function ActionPanel({
   amountToCall,
   hasStarted,
@@ -934,11 +1048,11 @@ function ActionPanel({
       : minimumRaiseTo;
 
   return (
-    <aside className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+    <aside className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-white shadow-xl shadow-zinc-950/20">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-950">Action</h2>
-          <p className="mt-1 text-sm text-zinc-600">
+          <h2 className="text-lg font-semibold text-white">Action</h2>
+          <p className="mt-1 text-sm text-zinc-400">
             {hasStarted
               ? tableState
                 ? phaseLabels[tableState.phase]
@@ -946,7 +1060,7 @@ function ActionPanel({
               : "Waiting to start"}
           </p>
         </div>
-        <div className="rounded-md bg-zinc-950 p-2 text-white">
+        <div className="rounded-md bg-amber-400 p-2 text-zinc-950">
           <CircleDollarSign className="h-5 w-5" aria-hidden="true" />
         </div>
       </div>
@@ -964,34 +1078,36 @@ function ActionPanel({
               Start Game
             </button>
           ) : (
-            <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm font-medium text-zinc-700">
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm font-medium text-zinc-300">
               Waiting on the host
             </div>
           )}
         </div>
       ) : isLocalTurn ? (
         <div className="mt-5 space-y-3">
-          <button
-            type="button"
-            onClick={onFold}
-            disabled={!isConnected}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 text-sm font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <X className="h-4 w-4" aria-hidden="true" />
-            Fold
-          </button>
+          {amountToCall > 0 ? (
+            <button
+              type="button"
+              onClick={onFold}
+              disabled={!isConnected}
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-rose-400/30 bg-rose-500/15 px-4 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+              Fold
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onCheckOrCall}
             disabled={!isConnected}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
+            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
           >
             <Check className="h-4 w-4" aria-hidden="true" />
             {amountToCall > 0 ? `Call ${formatChips(amountToCall)}` : "Check"}
           </button>
-          <form onSubmit={onRaiseSubmit} className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+          <form onSubmit={onRaiseSubmit} className="rounded-lg border border-white/10 bg-white/[0.06] p-3">
             <label
-              className="block text-sm font-medium text-zinc-700"
+              className="block text-sm font-medium text-zinc-200"
               htmlFor="raise-to"
             >
               Raise to
@@ -1003,7 +1119,7 @@ function ActionPanel({
                     key={target.label}
                     type="button"
                     onClick={() => onQuickBet(target.totalBet)}
-                    className="h-9 rounded-md border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-800 transition hover:border-emerald-700 hover:text-emerald-800"
+                    className="h-9 rounded-md border border-white/10 bg-zinc-900 px-2 text-xs font-semibold text-zinc-100 transition hover:border-amber-300/70 hover:text-amber-100"
                   >
                     {target.label}
                   </button>
@@ -1020,12 +1136,12 @@ function ActionPanel({
                 value={raiseTo}
                 disabled={!canRaise}
                 onChange={(event) => setRaiseTo(event.target.value)}
-                className="h-11 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-950 outline-none transition focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/20 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
+                className="h-11 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-900 px-3 text-sm text-white outline-none transition focus:border-amber-300/70 focus:ring-2 focus:ring-amber-300/20 disabled:cursor-not-allowed disabled:bg-zinc-900/50 disabled:text-zinc-500"
               />
               <button
                 type="submit"
                 disabled={!isConnected || !canRaise}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-amber-500 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-zinc-300"
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-amber-400 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
               >
                 <ArrowUp className="h-4 w-4" aria-hidden="true" />
                 Raise
@@ -1034,22 +1150,22 @@ function ActionPanel({
           </form>
         </div>
       ) : (
-        <div className="mt-5 rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm font-medium text-zinc-700">
+        <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.06] p-4 text-sm font-medium text-zinc-300">
           {tableState?.currentTurnPlayerId ? "Waiting for action" : "Hand settled"}
         </div>
       )}
 
       {tableState?.pot.awards.length ? (
         <div className="mt-5 space-y-2">
-          <h3 className="text-sm font-semibold text-zinc-950">Awards</h3>
+          <h3 className="text-sm font-semibold text-white">Awards</h3>
           {tableState.pot.awards.map((award, index) => (
             <div
               key={`${award.amount}-${index}`}
-              className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+              className="rounded-lg border border-amber-300/30 bg-amber-400/10 p-3 text-sm text-amber-100"
             >
               <p className="font-semibold">{formatChips(award.amount)} pot</p>
               {award.handDescription ? (
-                <p className="mt-1 text-amber-900">{award.handDescription}</p>
+                <p className="mt-1 text-amber-200">{award.handDescription}</p>
               ) : null}
             </div>
           ))}

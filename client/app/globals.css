@@ -43,3 +43,14 @@ input {
     transform: translateY(0) scale(1);
   }
 }
+
+@keyframes active-seat-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 22px rgba(251, 191, 36, 0.42);
+  }
+
+  50% {
+    box-shadow: 0 0 36px rgba(251, 191, 36, 0.74);
+  }
+}

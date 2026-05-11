@@ -2,6 +2,18 @@ import { NEXTAUTH_SESSION_COOKIE_NAMES } from "@poker-platform/shared/auth/cooki
 import { NextResponse, type NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/socket.io")) {
+    const requestHeaders = new Headers(request.headers);
+
+    requestHeaders.set("ngrok-skip-browser-warning", "true");
+
+    return NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
+  }
+
   const hasSessionCookie = NEXTAUTH_SESSION_COOKIE_NAMES.some((cookieName) =>
     request.cookies.has(cookieName),
   );
@@ -20,5 +32,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/lobby/:path*", "/table/:path*"],
+  matcher: ["/lobby/:path*", "/table/:path*", "/socket.io", "/socket.io/:path*"],
 };

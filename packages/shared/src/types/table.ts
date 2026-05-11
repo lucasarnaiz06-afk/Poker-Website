@@ -51,6 +51,23 @@ export type PublicHandCompleteWinner = {
   handDescription: string | null;
 };
 
+export type PublicGameLogEntry = {
+  id: string;
+  handNumber: number;
+  at: string;
+  message: string;
+  tone: "system" | "action" | "deal" | "showdown" | "award";
+};
+
+export type PublicHandHistoryEntry = {
+  handNumber: number;
+  completedAt: string;
+  potSize: number;
+  winningHandName: string | null;
+  winningHandDescription: string | null;
+  winners: PublicHandCompleteWinner[];
+};
+
 export type PublicTablePlayer = {
   id: string;
   seat: number;
@@ -90,6 +107,8 @@ export type PublicTableState = {
     description: string;
     rank: number;
   }>;
+  actionLog: PublicGameLogEntry[];
+  handHistory: PublicHandHistoryEntry[];
   players: PublicTablePlayer[];
 };
 

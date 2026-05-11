@@ -1,8 +1,10 @@
 import type {
   LobbySummary,
   PublicCard,
+  PublicGameLogEntry,
   PublicHandCompletePayload,
   PublicHandCompleteWinner,
+  PublicHandHistoryEntry,
   PublicPotAward,
 } from "@poker-platform/shared/types";
 import {
@@ -65,6 +67,9 @@ type ActiveTable = {
   lobby: LobbySummary;
   engine: PokerEngine;
   handNumber: number;
+  logSequence: number;
+  actionLog: PublicGameLogEntry[];
+  handHistory: PublicHandHistoryEntry[];
   lastHandCompletePayload?: PublicHandCompletePayload;
   startedByUserId: string;
   createdAt: Date;
@@ -186,6 +191,14 @@ function getPlayerName(lobby: LobbySummary, playerId: string) {
   return lobbyPlayer?.name ?? lobbyPlayer?.email ?? null;
 }
 
+function getPlayerDisplayName(lobby: LobbySummary, playerId: string) {
+  return getPlayerName(lobby, playerId) ?? "Player";
+}
+
+function formatChips(value: number) {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
 function buildWinnerSummaries(
   lobby: LobbySummary,
   awards: readonly PublicPotAward[],
@@ -244,6 +257,100 @@ function buildHandCompletePayload(
   };
 }
 
+function buildHandHistoryEntry(
+  payload: PublicHandCompletePayload,
+): PublicHandHistoryEntry {
+  return {
+    handNumber: payload.handNumber,
+    completedAt: payload.completedAt,
+    potSize: payload.potSize,
+    winningHandName: payload.winningHandName,
+    winningHandDescription: payload.winningHandDescription,
+    winners: payload.winners,
+  };
+}
+
+function describePhaseDeal(boardLength: number) {
+  if (boardLength === 3) {
+    return "Dealing the flop.";
+  }
+
+  if (boardLength === 4) {
+    return "Dealing the turn.";
+  }
+
+  if (boardLength === 5) {
+    return "Dealing the river.";
+  }
+
+  return null;
+}
+
+function describePlayerAction({
+  action,
+  inputTotalBet,
+  lobby,
+  playerId,
+  previousState,
+  nextState,
+}: {
+  action: PlayerActionType;
+  inputTotalBet?: number;
+  lobby: LobbySummary;
+  playerId: string;
+  previousState: PokerStateSnapshot;
+  nextState: PokerStateSnapshot;
+}) {
+  const name = getPlayerDisplayName(lobby, playerId);
+  const previousPlayer = previousState.players.find(
+    (player) => player.id === playerId,
+  );
+  const nextPlayer = nextState.players.find((player) => player.id === playerId);
+  const amountToCall = previousPlayer
+    ? Math.max(0, previousState.currentBet - previousPlayer.currentBet)
+    : 0;
+
+  if (action === "fold") {
+    return `${name} folded.`;
+  }
+
+  if (action === "check") {
+    return `${name} checked.`;
+  }
+
+  if (action === "call") {
+    const callAmount = previousPlayer
+      ? Math.min(amountToCall, previousPlayer.stack)
+      : amountToCall;
+
+    return `${name} called ${formatChips(callAmount)}.`;
+  }
+
+  const totalBet = inputTotalBet ?? nextPlayer?.currentBet ?? previousState.currentBet;
+
+  if (nextPlayer?.allIn) {
+    return `${name} moved all-in for ${formatChips(totalBet)}.`;
+  }
+
+  return `${name} raised to ${formatChips(totalBet)}.`;
+}
+
+function describeHandComplete(payload: PublicHandCompletePayload) {
+  const winnerNames = payload.winners.map((winner) => winner.name ?? "Player");
+  const handDescription =
+    payload.winningHandDescription ?? payload.winningHandName ?? null;
+  const winnerText =
+    winnerNames.length === 0
+      ? "Hand complete"
+      : winnerNames.length === 1
+        ? `${winnerNames[0]} wins`
+        : `${winnerNames.join(", ")} split`;
+
+  return handDescription
+    ? `${winnerText} ${formatChips(payload.potSize)} with ${handDescription}.`
+    : `${winnerText} ${formatChips(payload.potSize)}.`;
+}
+
 export class TableRuntime {
   private readonly tables = new Map<string, ActiveTable>();
 
@@ -290,10 +397,15 @@ export class TableRuntime {
       lobby,
       engine: buildEngineFromLobby(lobby, this.options.deckProvider?.(lobby)),
       handNumber: 1,
+      logSequence: 0,
+      actionLog: [],
+      handHistory: [],
       startedByUserId: requestedByUserId,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+
+    this.appendActionLog(table, "Hand 1 started. Dealing pre-flop.", "deal");
 
     await this.options.activateLobby?.(lobbyId);
     this.tables.set(lobbyId, table);
@@ -316,6 +428,8 @@ export class TableRuntime {
   ) {
     const table = this.requireTable(lobbyId);
     const action = readActionType(input);
+    const raiseTotal = action === "raise" ? readRaiseTotal(input) : undefined;
+    const previousState = table.engine.getState();
     let state: PokerStateSnapshot;
 
     if (action === "fold") {
@@ -325,10 +439,23 @@ export class TableRuntime {
     } else if (action === "call") {
       state = table.engine.call(playerId);
     } else {
-      state = table.engine.raise(playerId, readRaiseTotal(input));
+      state = table.engine.raise(playerId, raiseTotal ?? readRaiseTotal(input));
     }
 
     table.updatedAt = new Date();
+    this.appendActionLog(
+      table,
+      describePlayerAction({
+        action,
+        inputTotalBet: raiseTotal,
+        lobby: table.lobby,
+        playerId,
+        previousState,
+        nextState: state,
+      }),
+      "action",
+    );
+    this.appendPhaseChangeLogs(table, previousState, state);
 
     console.log("[table-runtime] player action accepted", {
       lobbyId,
@@ -355,7 +482,10 @@ export class TableRuntime {
     const state = table.engine.getState();
 
     await recipient.emitGameState(
-      sanitizeTableStateForPlayer(lobbyId, state, recipient.userId),
+      sanitizeTableStateForPlayer(lobbyId, state, recipient.userId, {
+        actionLog: table.actionLog,
+        handHistory: table.handHistory,
+      }),
     );
 
     if (table.lastHandCompletePayload) {
@@ -364,12 +494,16 @@ export class TableRuntime {
   }
 
   async broadcastTableState(lobbyId: string) {
-    const state = this.getTableState(lobbyId);
+    const table = this.requireTable(lobbyId);
+    const state = table.engine.getState();
     const recipients = await this.options.getRecipients(lobbyId);
 
     for (const recipient of recipients) {
       await recipient.emitGameState(
-        sanitizeTableStateForPlayer(lobbyId, state, recipient.userId),
+        sanitizeTableStateForPlayer(lobbyId, state, recipient.userId, {
+          actionLog: table.actionLog,
+          handHistory: table.handHistory,
+        }),
       );
     }
 
@@ -394,6 +528,11 @@ export class TableRuntime {
     );
 
     table.lastHandCompletePayload = payload;
+    table.handHistory = [buildHandHistoryEntry(payload), ...table.handHistory].slice(
+      0,
+      3,
+    );
+    this.appendActionLog(table, describeHandComplete(payload), "award", completedAt);
 
     await this.options.persistCompletedHand?.({
       lobbyId: table.lobbyId,
@@ -429,6 +568,13 @@ export class TableRuntime {
     table.engine.startHand({
       deck: this.options.deckProvider?.(table.lobby),
     });
+    table.logSequence = 0;
+    table.actionLog = [];
+    this.appendActionLog(
+      table,
+      `Hand ${table.handNumber} started. Dealing pre-flop.`,
+      "deal",
+    );
     table.updatedAt = new Date();
 
     await this.broadcastTableState(table.lobbyId);
@@ -454,6 +600,47 @@ export class TableRuntime {
       handNumber: payload.handNumber,
       recipients: recipients.length,
     });
+  }
+
+  private appendActionLog(
+    table: ActiveTable,
+    message: string,
+    tone: PublicGameLogEntry["tone"],
+    at = new Date(),
+  ) {
+    table.logSequence += 1;
+    table.actionLog = [
+      ...table.actionLog,
+      {
+        id: `${table.handNumber}-${table.logSequence}`,
+        handNumber: table.handNumber,
+        at: at.toISOString(),
+        message,
+        tone,
+      },
+    ].slice(-40);
+  }
+
+  private appendPhaseChangeLogs(
+    table: ActiveTable,
+    previousState: PokerStateSnapshot,
+    nextState: PokerStateSnapshot,
+  ) {
+    for (
+      let boardLength = previousState.board.length + 1;
+      boardLength <= nextState.board.length;
+      boardLength += 1
+    ) {
+      const message = describePhaseDeal(boardLength);
+
+      if (message) {
+        this.appendActionLog(table, message, "deal");
+      }
+    }
+
+    if (previousState.phase !== "SHOWDOWN" && nextState.phase === "SHOWDOWN") {
+      this.appendActionLog(table, "Showdown. Revealing live hands.", "showdown");
+    }
   }
 
   toErrorPayload(error: unknown) {

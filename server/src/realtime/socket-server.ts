@@ -156,6 +156,7 @@ export function createSocketServer(httpServer: HttpServer) {
       origin(origin, callback) {
         callback(null, isCorsOriginAllowed(origin));
       },
+      allowedHeaders: ["content-type", "ngrok-skip-browser-warning"],
       credentials: true,
     },
   });

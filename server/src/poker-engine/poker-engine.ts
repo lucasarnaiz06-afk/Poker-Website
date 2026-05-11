@@ -302,6 +302,14 @@ export class PokerEngine {
 
   fold(playerId: string) {
     const player = this.requireActingPlayer(playerId);
+    const amountToCall = this.currentBet - player.currentBet;
+
+    if (amountToCall <= 0) {
+      throw new PokerEngineError(
+        "FOLD_NOT_ALLOWED",
+        "Player cannot fold when checking is free.",
+      );
+    }
 
     player.folded = true;
     player.hasActed = true;

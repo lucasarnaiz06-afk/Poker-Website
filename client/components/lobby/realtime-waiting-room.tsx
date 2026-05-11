@@ -4,6 +4,10 @@ import type {
   LobbyPresencePayload,
   LobbySummary,
 } from "@poker-platform/shared/types";
+import {
+  getRealtimeSocketOptions,
+  getRealtimeSocketUrl,
+} from "@/lib/realtime-socket";
 import { LoaderCircle, Users, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { io, type Socket } from "socket.io-client";
@@ -24,16 +28,6 @@ type RealtimeWaitingRoomProps = {
   initialLobby: LobbySummary;
   currentUserId: string;
 };
-
-function getSocketUrl() {
-  const configuredUrl = process.env.NEXT_PUBLIC_SOCKET_URL?.trim();
-
-  if (configuredUrl) {
-    return configuredUrl;
-  }
-
-  return null;
-}
 
 function getConnectionLabel(status: ConnectionStatus) {
   if (status === "connected") {
@@ -71,17 +65,12 @@ export function RealtimeWaitingRoom({
   const onlineUsers = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
 
   useEffect(() => {
-    const socketUrl = getSocketUrl();
+    const socketUrl = getRealtimeSocketUrl();
+    const socketOptions = getRealtimeSocketOptions();
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
       socketUrl
-        ? io(socketUrl, {
-            autoConnect: false,
-            withCredentials: true,
-          })
-        : io({
-            autoConnect: false,
-            withCredentials: true,
-          });
+        ? io(socketUrl, socketOptions)
+        : io(socketOptions);
 
     function joinLobby() {
       socket.emit("join_lobby", { lobbyId: initialLobby.id });

@@ -223,6 +223,50 @@ function testAllInBetStillRequiresNextPlayerToCall() {
   ]);
 }
 
+function testFoldIsRejectedWhenCheckingIsFree() {
+  const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20 });
+  const deck: Card[] = deckWithTopCards([
+    "Ah", // Bob, seat 2
+    "Ks", // Alice, seat 1
+    "Ad", // Bob
+    "Kc", // Alice
+    "2s", // flop burn
+    "7h",
+    "4d",
+    "2c",
+    "3s", // turn burn
+    "9c",
+    "5s", // river burn
+    "Qd",
+  ]);
+
+  engine.addPlayer({ id: "alice", seat: 1, stack: 1000 });
+  engine.addPlayer({ id: "bob", seat: 2, stack: 1000 });
+
+  let state = engine.startHand({ buttonSeat: 1, deck });
+
+  state = engine.call("alice");
+  assert.equal(state.currentTurnPlayerId, "bob");
+  assert.throws(
+    () => engine.fold("bob"),
+    (error) => {
+      assertEngineErrorCode(error, "FOLD_NOT_ALLOWED");
+      return true;
+    },
+  );
+
+  state = engine.check("bob");
+  assert.equal(state.phase, "FLOP");
+  assert.equal(state.currentTurnPlayerId, "bob");
+  assert.throws(
+    () => engine.fold("bob"),
+    (error) => {
+      assertEngineErrorCode(error, "FOLD_NOT_ALLOWED");
+      return true;
+    },
+  );
+}
+
 function testShortAllInRaiseStillRequiresRemainingAction() {
   const engine = new PokerEngine({ smallBlind: 10, bigBlind: 20 });
   const deck: Card[] = deckWithTopCards([
@@ -342,6 +386,7 @@ function testFlushBeatsStraight() {
 testDeck();
 testSimulatedSidePotShowdown();
 testAllInBetStillRequiresNextPlayerToCall();
+testFoldIsRejectedWhenCheckingIsFree();
 testShortAllInRaiseStillRequiresRemainingAction();
 testRiverCheckStillGivesInPositionPlayerAction();
 testFlushBeatsStraight();
