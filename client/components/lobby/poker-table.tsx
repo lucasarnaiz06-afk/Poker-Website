@@ -4,6 +4,7 @@ import type {
   LobbyPresencePayload,
   LobbySummary,
   PublicCard,
+  PublicChatMessagePayload,
   PublicGameLogEntry,
   PublicHandCompletePayload,
   PublicHandHistoryEntry,
@@ -22,11 +23,13 @@ import {
   Play,
   Radio,
   ScrollText,
+  Smile,
   Trophy,
   Wifi,
   WifiOff,
   X,
 } from "lucide-react";
+import Image from "next/image";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
@@ -39,6 +42,7 @@ type ServerToClientEvents = {
   table_error: (payload: { message: string; code: string }) => void;
   game_state_update: (payload: PublicTableState) => void;
   hand_complete: (payload: PublicHandCompletePayload) => void;
+  receive_chat_message: (payload: PublicChatMessagePayload) => void;
 };
 
 type ClientToServerEvents = {
@@ -49,6 +53,11 @@ type ClientToServerEvents = {
     lobbyId: string;
     action: PlayerActionType;
     totalBet?: number;
+  }) => void;
+  send_chat_message: (payload: {
+    lobbyId: string;
+    message?: string;
+    emoteId?: string;
   }) => void;
 };
 
@@ -84,6 +93,9 @@ type QuickBetTarget = {
 };
 
 const chipFormatter = new Intl.NumberFormat("en-US");
+const CARD_BACK_SRC = "/cards/Blue_Backside.png";
+const CARD_PLACEHOLDER_SRC = "/cards/Grey_Blank.png";
+const EMOTE_IDS = Array.from({ length: 52 }, (_, index) => String(index + 1));
 
 const phaseLabels: Record<PublicTableState["phase"], string> = {
   NOT_STARTED: "Not started",
@@ -95,15 +107,20 @@ const phaseLabels: Record<PublicTableState["phase"], string> = {
   COMPLETE: "Complete",
 };
 
-const suitSymbols: Record<PublicCard["suit"], string> = {
-  c: "\u2663",
-  d: "\u2666",
-  h: "\u2665",
-  s: "\u2660",
-};
-
 function formatChips(value: number) {
   return chipFormatter.format(value);
+}
+
+function getCardImageSrc(card: PublicCard) {
+  const rank = card.rank === "T" ? "10" : card.rank;
+
+  return `/cards/${rank}${card.suit.toUpperCase()}.png`;
+}
+
+function getCardAltText(card: PublicCard) {
+  const rank = card.rank === "T" ? "10" : card.rank;
+
+  return `${rank}${card.suit.toUpperCase()}`;
 }
 
 function getPlayerDisplayName(
@@ -331,6 +348,9 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
   const [handComplete, setHandComplete] =
     useState<PublicHandCompletePayload | null>(null);
   const [raiseTo, setRaiseTo] = useState("");
+  const [chatMessages, setChatMessages] = useState<PublicChatMessagePayload[]>([]);
+  const [chatDraft, setChatDraft] = useState("");
+  const [isEmotePickerOpen, setIsEmotePickerOpen] = useState(false);
 
   const onlineUsers = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
   const viewer =
@@ -437,6 +457,16 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
       setHandComplete(payload);
     });
 
+    socket.on("receive_chat_message", (payload) => {
+      if (payload.lobbyId !== initialLobby.id) {
+        return;
+      }
+
+      setChatMessages((currentMessages) =>
+        [...currentMessages, payload].slice(-60),
+      );
+    });
+
     socket.connect();
 
     return () => {
@@ -519,6 +549,36 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
 
   function handleQuickBet(totalBet: number) {
     setRaiseTo(String(totalBet));
+  }
+
+  function emitChatMessage(payload: { message?: string; emoteId?: string }) {
+    if (!socketRef.current || !isConnected) {
+      setSocketError("The table is not connected.");
+      return;
+    }
+
+    socketRef.current.emit("send_chat_message", {
+      lobbyId: lobby.id,
+      ...payload,
+    });
+  }
+
+  function handleChatSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const message = chatDraft.trim();
+
+    if (!message) {
+      return;
+    }
+
+    emitChatMessage({ message });
+    setChatDraft("");
+  }
+
+  function handleSendEmote(emoteId: string) {
+    emitChatMessage({ emoteId });
+    setIsEmotePickerOpen(false);
   }
 
   return (
@@ -604,7 +664,19 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
             tableState={tableState}
             viewer={viewer}
           />
-          <ActionLogPanel events={tableState?.actionLog ?? []} />
+          <ActionLogPanel
+            chatDraft={chatDraft}
+            chatMessages={chatMessages}
+            events={tableState?.actionLog ?? []}
+            isConnected={isConnected}
+            isEmotePickerOpen={isEmotePickerOpen}
+            onChatDraftChange={setChatDraft}
+            onChatSubmit={handleChatSubmit}
+            onSendEmote={handleSendEmote}
+            onToggleEmotePicker={() =>
+              setIsEmotePickerOpen((isOpen) => !isOpen)
+            }
+          />
           <HandHistoryPanel hands={tableState?.handHistory ?? []} />
         </div>
       </section>
@@ -858,12 +930,14 @@ function PlayingCard({
       <div
         className={`${sizeClasses} flex shrink-0 animate-[deal-card_120ms_steps(2,end)] items-center justify-center border-4 border-[#f8f8f2] bg-[#1d2b53] p-1 motion-reduce:animate-none`}
       >
-        <div className="grid h-full w-full grid-cols-2 border-2 border-[#29adff]">
-          <span className="bg-[#29adff]" />
-          <span className="bg-[#1d2b53]" />
-          <span className="bg-[#1d2b53]" />
-          <span className="bg-[#29adff]" />
-        </div>
+        <Image
+          src={CARD_BACK_SRC}
+          alt="Face-down card"
+          width={80}
+          height={112}
+          unoptimized
+          className="h-full w-full object-contain"
+        />
       </div>
     );
   }
@@ -871,25 +945,32 @@ function PlayingCard({
   if (!card || placeholder) {
     return (
       <div
-        className={`${sizeClasses} shrink-0 border-4 border-dashed border-[#0b1020] bg-[#4b5563]`}
-      />
+        className={`${sizeClasses} shrink-0 border-4 border-dashed border-[#0b1020] bg-[#4b5563] p-1`}
+      >
+        <Image
+          src={CARD_PLACEHOLDER_SRC}
+          alt="Empty card slot"
+          width={80}
+          height={112}
+          unoptimized
+          className="h-full w-full object-contain opacity-60"
+        />
+      </div>
     );
   }
 
-  const isRed = card.suit === "h" || card.suit === "d";
-  const rank = card.rank === "T" ? "10" : card.rank;
-
   return (
     <div
-      className={`${sizeClasses} flex shrink-0 animate-[deal-card_120ms_steps(2,end)] flex-col justify-between border-4 border-[#0b1020] bg-[#f8f8f2] p-1.5 font-bold ${
-        isRed ? "text-[#d72638]" : "text-[#0b1020]"
-      } motion-reduce:animate-none`}
+      className={`${sizeClasses} flex shrink-0 animate-[deal-card_120ms_steps(2,end)] items-center justify-center border-4 border-[#0b1020] bg-[#f8f8f2] p-1 motion-reduce:animate-none`}
     >
-      <span className="leading-none">{rank}</span>
-      <span className="self-center text-xl leading-none md:text-3xl">
-        {suitSymbols[card.suit]}
-      </span>
-      <span className="self-end leading-none">{rank}</span>
+      <Image
+        src={getCardImageSrc(card)}
+        alt={getCardAltText(card)}
+        width={80}
+        height={112}
+        unoptimized
+        className="h-full w-full object-contain"
+      />
     </div>
   );
 }
@@ -918,9 +999,65 @@ function getLogToneClasses(tone: PublicGameLogEntry["tone"]) {
   return "border-[#f8f8f2] bg-[#111827] text-[#f8f8f2]";
 }
 
-function ActionLogPanel({ events }: { events: PublicGameLogEntry[] }) {
-  const visibleEvents = events.slice(-18);
+type LogListItem =
+  | {
+      id: string;
+      at: string;
+      kind: "event";
+      message: string;
+      tone: PublicGameLogEntry["tone"];
+    }
+  | {
+      id: string;
+      at: string;
+      kind: "chat";
+      message: string | null;
+      playerName: string;
+      emoteSrc: string | null;
+    };
+
+function ActionLogPanel({
+  chatDraft,
+  chatMessages,
+  events,
+  isConnected,
+  isEmotePickerOpen,
+  onChatDraftChange,
+  onChatSubmit,
+  onSendEmote,
+  onToggleEmotePicker,
+}: {
+  chatDraft: string;
+  chatMessages: PublicChatMessagePayload[];
+  events: PublicGameLogEntry[];
+  isConnected: boolean;
+  isEmotePickerOpen: boolean;
+  onChatDraftChange: (value: string) => void;
+  onChatSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSendEmote: (emoteId: string) => void;
+  onToggleEmotePicker: () => void;
+}) {
+  const visibleEvents: LogListItem[] = [
+    ...events.map((event) => ({
+      id: event.id,
+      at: event.at,
+      kind: "event" as const,
+      message: event.message,
+      tone: event.tone,
+    })),
+    ...chatMessages.map((message) => ({
+      id: message.id,
+      at: message.sentAt,
+      kind: "chat" as const,
+      message: message.message,
+      playerName: message.playerName,
+      emoteSrc: message.emoteSrc,
+    })),
+  ]
+    .sort((left, right) => left.at.localeCompare(right.at))
+    .slice(-24);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
+  const latestEventId = visibleEvents.at(-1)?.id;
 
   useEffect(() => {
     const logElement = logScrollRef.current;
@@ -930,7 +1067,7 @@ function ActionLogPanel({ events }: { events: PublicGameLogEntry[] }) {
     }
 
     logElement.scrollTop = logElement.scrollHeight;
-  }, [visibleEvents.length]);
+  }, [latestEventId]);
 
   return (
     <aside className="border-4 border-[#f8f8f2] bg-[#111827] p-4 text-[#f8f8f2]">
@@ -949,27 +1086,108 @@ function ActionLogPanel({ events }: { events: PublicGameLogEntry[] }) {
         className="mt-4 max-h-72 space-y-2 overflow-y-auto border-2 border-[#0b1020] bg-[#0b1020] p-2"
       >
         {visibleEvents.length > 0 ? (
-          visibleEvents.map((event) => (
-            <div
-              key={event.id}
-              className={`border-2 px-3 py-2 text-[9px] leading-5 ${getLogToneClasses(
-                event.tone,
-              )}`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="leading-5">{event.message}</p>
-                <time className="shrink-0 text-[8px] text-[#9ca3af]">
-                  {formatLogTime(event.at)}
-                </time>
+          visibleEvents.map((event) => {
+            if (event.kind === "chat") {
+              return (
+                <div
+                  key={event.id}
+                  className="border-2 border-[#ff77a8] bg-[#3b1f3f] px-3 py-2 text-[9px] leading-5 text-[#ffd6e8]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p>
+                        [{event.playerName}]: {event.message ?? ""}
+                      </p>
+                      {event.emoteSrc ? (
+                        <Image
+                          src={event.emoteSrc}
+                          alt={`${event.playerName} emote`}
+                          width={40}
+                          height={40}
+                          unoptimized
+                          className="mt-2 h-10 w-10 border-2 border-[#f8f8f2] bg-[#0b1020] object-contain"
+                        />
+                      ) : null}
+                    </div>
+                    <time className="shrink-0 text-[8px] text-[#9ca3af]">
+                      {formatLogTime(event.at)}
+                    </time>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={event.id}
+                className={`border-2 px-3 py-2 text-[9px] leading-5 ${getLogToneClasses(
+                  event.tone,
+                )}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <p className="leading-5">{event.message}</p>
+                  <time className="shrink-0 text-[8px] text-[#9ca3af]">
+                    {formatLogTime(event.at)}
+                  </time>
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="border-2 border-[#f8f8f2] bg-[#111827] p-4 text-[10px] text-[#9ca3af]">
             No actions yet
           </div>
         )}
       </div>
+
+      <form onSubmit={onChatSubmit} className="mt-3 flex gap-2">
+        <input
+          aria-label="Chat message"
+          maxLength={180}
+          value={chatDraft}
+          onChange={(event) => onChatDraftChange(event.target.value)}
+          className="h-11 min-w-0 flex-1 border-4 border-[#f8f8f2] bg-[#0b1020] px-3 text-[9px] text-[#f8f8f2] outline-none focus:border-[#ff77a8]"
+          placeholder="CHAT..."
+        />
+        <button
+          type="button"
+          onClick={onToggleEmotePicker}
+          className="inline-flex h-11 w-12 items-center justify-center border-4 border-[#ff77a8] bg-[#3b1f3f] text-[#ffd6e8] hover:bg-[#ff77a8] hover:text-[#0b1020]"
+          aria-label="Open emotes"
+        >
+          <Smile className="h-4 w-4" aria-hidden="true" />
+        </button>
+        <button
+          type="submit"
+          disabled={!isConnected || chatDraft.trim().length === 0}
+          className="h-11 border-4 border-[#7cff6b] bg-[#173f1f] px-3 text-[9px] font-semibold text-[#7cff6b] hover:bg-[#7cff6b] hover:text-[#0b1020] disabled:cursor-not-allowed disabled:border-[#4b5563] disabled:bg-[#1f2937] disabled:text-[#6b7280]"
+        >
+          Send
+        </button>
+      </form>
+
+      {isEmotePickerOpen ? (
+        <div className="mt-3 grid max-h-44 grid-cols-6 gap-2 overflow-y-auto border-4 border-[#ff77a8] bg-[#0b1020] p-2">
+          {EMOTE_IDS.map((emoteId) => (
+            <button
+              key={emoteId}
+              type="button"
+              onClick={() => onSendEmote(emoteId)}
+              disabled={!isConnected}
+              className="flex h-12 items-center justify-center border-2 border-[#f8f8f2] bg-[#111827] p-1 hover:bg-[#ff77a8] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Image
+                src={`/emotes/${emoteId}.png`}
+                alt={`Emote ${emoteId}`}
+                width={32}
+                height={32}
+                unoptimized
+                className="h-8 w-8 object-contain"
+              />
+            </button>
+          ))}
+        </div>
+      ) : null}
     </aside>
   );
 }

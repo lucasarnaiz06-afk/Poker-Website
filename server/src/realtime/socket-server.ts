@@ -9,6 +9,8 @@ import {
 } from "@poker-platform/shared/lobbies";
 import type {
   LobbyPresencePayload,
+  LobbySummary,
+  PublicChatMessagePayload,
   PublicHandCompletePayload,
 } from "@poker-platform/shared/types";
 import { Server, type Socket } from "socket.io";
@@ -25,6 +27,11 @@ type ClientToServerEvents = {
   leave_lobby: (payload: { lobbyId?: string }) => void;
   start_game: (payload: { lobbyId?: string }) => void;
   player_action: (payload: ({ lobbyId?: string } & PlayerActionInput)) => void;
+  send_chat_message: (payload: {
+    lobbyId?: string;
+    message?: string;
+    emoteId?: string;
+  }) => void;
 };
 
 type ServerToClientEvents = {
@@ -33,6 +40,7 @@ type ServerToClientEvents = {
   table_error: (payload: { message: string; code: string }) => void;
   game_state_update: (payload: PublicTableState) => void;
   hand_complete: (payload: PublicHandCompletePayload) => void;
+  receive_chat_message: (payload: PublicChatMessagePayload) => void;
 };
 
 type InterServerEvents = Record<string, never>;
@@ -57,6 +65,8 @@ type LobbyServer = Server<
 >;
 
 const presenceByLobby = new Map<string, Map<string, number>>();
+const CHAT_MESSAGE_MAX_LENGTH = 180;
+const EMOTE_ID_PATTERN = /^(?:[1-9]|[1-4][0-9]|5[0-2])$/;
 
 function getRoomName(lobbyId: string) {
   return `lobby:${lobbyId}`;
@@ -64,6 +74,18 @@ function getRoomName(lobbyId: string) {
 
 function readLobbyId(payload?: { lobbyId?: string } | null) {
   return typeof payload?.lobbyId === "string" ? payload.lobbyId.trim() : "";
+}
+
+function readChatMessage(payload?: { message?: string } | null) {
+  const message = typeof payload?.message === "string" ? payload.message.trim() : "";
+
+  return message.slice(0, CHAT_MESSAGE_MAX_LENGTH);
+}
+
+function readEmoteId(payload?: { emoteId?: string } | null) {
+  const emoteId = typeof payload?.emoteId === "string" ? payload.emoteId.trim() : "";
+
+  return EMOTE_ID_PATTERN.test(emoteId) ? emoteId : "";
 }
 
 function addPresence(lobbyId: string, userId: string) {
@@ -123,7 +145,10 @@ async function joinLobbyRoom(
   socket: LobbySocket,
   lobbyId: string,
 ) {
-  await getWaitingRoomLobbyForUser(lobbyId, socket.data.session.user.id);
+  const lobby = await getWaitingRoomLobbyForUser(
+    lobbyId,
+    socket.data.session.user.id,
+  );
 
   if (!socket.data.lobbyIds.has(lobbyId)) {
     socket.data.lobbyIds.add(lobbyId);
@@ -132,6 +157,53 @@ async function joinLobbyRoom(
   }
 
   await emitPresenceUpdate(io, lobbyId);
+
+  return lobby;
+}
+
+async function getLobbyForSocket(
+  io: LobbyServer,
+  socket: LobbySocket,
+  lobbyId: string,
+) {
+  if (!socket.data.lobbyIds.has(lobbyId)) {
+    return joinLobbyRoom(io, socket, lobbyId);
+  }
+
+  return getWaitingRoomLobbyForUser(lobbyId, socket.data.session.user.id);
+}
+
+function getPlayerDisplayName(lobby: LobbySummary, playerId: string) {
+  const lobbyPlayer = lobby.players.find((player) => player.userId === playerId);
+
+  return lobbyPlayer?.name ?? lobbyPlayer?.email ?? "Player";
+}
+
+function buildChatPayload({
+  emoteId,
+  lobby,
+  lobbyId,
+  message,
+  playerId,
+}: {
+  emoteId: string;
+  lobby: LobbySummary;
+  lobbyId: string;
+  message: string;
+  playerId: string;
+}): PublicChatMessagePayload {
+  const sentAt = new Date();
+
+  return {
+    id: `${sentAt.getTime()}:${playerId}:${Math.random().toString(36).slice(2)}`,
+    lobbyId,
+    playerId,
+    playerName: getPlayerDisplayName(lobby, playerId),
+    message: message || null,
+    emoteId: emoteId || null,
+    emoteSrc: emoteId ? `/emotes/${emoteId}.png` : null,
+    sentAt: sentAt.toISOString(),
+  };
 }
 
 function leaveLobby(socket: LobbySocket, lobbyId: string) {
@@ -293,6 +365,43 @@ export function createSocketServer(httpServer: HttpServer) {
             : tableRuntime.toErrorPayload(error);
 
         socket.emit("table_error", payload);
+      }
+    });
+
+    socket.on("send_chat_message", async (payload) => {
+      const lobbyId = readLobbyId(payload);
+
+      if (!lobbyId) {
+        socket.emit("lobby_error", { message: "Lobby ID is required." });
+        return;
+      }
+
+      const message = readChatMessage(payload);
+      const emoteId = readEmoteId(payload);
+
+      if (!message && !emoteId) {
+        socket.emit("lobby_error", { message: "Chat message is empty." });
+        return;
+      }
+
+      try {
+        const lobby = await getLobbyForSocket(io, socket, lobbyId);
+        const chatPayload = buildChatPayload({
+          emoteId,
+          lobby,
+          lobbyId,
+          message,
+          playerId: socket.data.session.user.id,
+        });
+
+        io.to(getRoomName(lobbyId)).emit("receive_chat_message", chatPayload);
+      } catch (error) {
+        const message =
+          error instanceof LobbyServiceError
+            ? error.message
+            : "Chat message failed.";
+
+        socket.emit("lobby_error", { message });
       }
     });
 
