@@ -1,5 +1,10 @@
 declare module "pokersolver" {
   export type SolvedPokerHand = {
+    cards: Array<{
+      value: string;
+      suit: string;
+      rank: number;
+    }>;
     name: string;
     descr: string;
     rank: number;

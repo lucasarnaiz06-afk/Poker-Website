@@ -170,7 +170,7 @@ function testSimulatedSidePotShowdown() {
       winnerIds: ["alice"],
       eligiblePlayerIds: ["alice", "carol"],
       handName: "Pair",
-      handDescription: "Pair, 9's",
+      handDescription: "Pair of Nines, Queen Kicker",
     },
   ]);
   assert.equal(getPlayerStack(state, "alice"), 1000);
@@ -383,6 +383,20 @@ function testFlushBeatsStraight() {
   );
 }
 
+function testPairDescriptionIncludesKicker() {
+  const pair = evaluateHoldemHand("pair", [
+    "Ks",
+    "Kd",
+    "As",
+    "9c",
+    "8d",
+    "4h",
+    "2s",
+  ].map(parseCardNotation));
+
+  assert.equal(pair.description, "Pair of Kings, Ace Kicker");
+}
+
 testDeck();
 testSimulatedSidePotShowdown();
 testAllInBetStillRequiresNextPlayerToCall();
@@ -390,5 +404,6 @@ testFoldIsRejectedWhenCheckingIsFree();
 testShortAllInRaiseStillRequiresRemainingAction();
 testRiverCheckStillGivesInPositionPlayerAction();
 testFlushBeatsStraight();
+testPairDescriptionIncludesKicker();
 
 console.log("Poker engine tests passed.");

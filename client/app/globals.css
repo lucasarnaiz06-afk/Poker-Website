@@ -1,18 +1,34 @@
+@import url("https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
-  background: #f7f7f4;
-  color: #18181b;
+  color-scheme: dark;
+  background: #0b1020;
+  color: #f8f8f2;
+}
+
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+html {
+  font-family: "Press Start 2P", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 body {
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(247, 247, 244, 0.94)),
-    #f7f7f4;
+  background: #0b1020;
+  color: #f8f8f2;
+  letter-spacing: 0;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -20,37 +36,33 @@ input {
   font: inherit;
 }
 
+img,
+canvas,
+svg {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
 @keyframes deal-card {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.96);
+    transform: translateY(8px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
 @keyframes winner-pop {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.96);
+    transform: translateY(8px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes active-seat-glow {
-  0%,
-  100% {
-    box-shadow: 0 0 22px rgba(251, 191, 36, 0.42);
-  }
-
-  50% {
-    box-shadow: 0 0 36px rgba(251, 191, 36, 0.74);
+    transform: translateY(0);
   }
 }

@@ -17,7 +17,6 @@ import {
 import {
   ArrowUp,
   Check,
-  CircleDollarSign,
   History,
   LoaderCircle,
   Play,
@@ -142,7 +141,7 @@ function getHandCompleteSubtitle(payload: PublicHandCompletePayload) {
     payload.winners.find((winner) => winner.handDescription)?.handDescription ??
     payload.winningHandDescription;
 
-  return handDescription ? `with ${handDescription}` : "wins the pot";
+  return handDescription ?? "Pot awarded";
 }
 
 function getConnectionLabel(status: ConnectionStatus) {
@@ -159,14 +158,14 @@ function getConnectionLabel(status: ConnectionStatus) {
 
 function getConnectionClasses(status: ConnectionStatus) {
   if (status === "connected") {
-    return "border-emerald-300/40 bg-emerald-400/10 text-emerald-100";
+    return "border-[#7cff6b] bg-[#173f1f] text-[#7cff6b]";
   }
 
   if (status === "connecting") {
-    return "border-amber-300/40 bg-amber-400/10 text-amber-100";
+    return "border-[#ffd166] bg-[#4a3517] text-[#ffd166]";
   }
 
-  return "border-zinc-500/40 bg-zinc-800 text-zinc-200";
+  return "border-[#f87171] bg-[#451a1a] text-[#fca5a5]";
 }
 
 function buildSeatViews({
@@ -524,7 +523,7 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
 
   return (
     <>
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-3 md:grid-cols-4">
         <Metric label="Players" value={`${lobby.playerCount}/${lobby.maxPlayers}`} />
         <Metric label="Blinds" value={`${lobby.smallBlind}/${lobby.bigBlind}`} />
         <Metric
@@ -538,22 +537,24 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
       </section>
 
       {socketError || tableError ? (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-950">
+        <div className="border-4 border-[#ffd166] bg-[#4a3517] px-4 py-3 text-[10px] font-medium text-[#ffd166]">
           {tableError ?? socketError}
         </div>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_400px]">
-        <div className="rounded-lg border border-zinc-900 bg-[radial-gradient(circle_at_top,#1f2937_0%,#09090b_52%,#030712_100%)] p-4 text-white shadow-2xl shadow-zinc-950/30 md:p-5 xl:p-6">
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <section className="grid min-h-[calc(100vh-260px)] items-center gap-5 xl:grid-cols-[minmax(900px,1fr)_380px] 2xl:grid-cols-[minmax(1050px,1fr)_400px]">
+        <div className="w-full justify-self-center border-4 border-[#f8f8f2] bg-[#111827] p-4 text-[#f8f8f2] md:p-5 xl:max-w-[1380px] xl:p-6 2xl:max-w-[1520px]">
+          <div className="mb-5 flex flex-col gap-3 border-b-4 border-[#f8f8f2] pb-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-xl font-semibold tracking-normal">Table</h2>
-              <p className="mt-1 text-sm text-zinc-300">
+              <h2 className="text-sm font-semibold tracking-normal md:text-base">
+                Pixel Poker
+              </h2>
+              <p className="mt-2 text-[10px] text-[#a3e635]">
                 {activeTurnName ? `${activeTurnName} to act` : "No active turn"}
               </p>
             </div>
             <span
-              className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${getConnectionClasses(
+              className={`inline-flex w-fit items-center gap-2 border-2 px-3 py-2 text-[10px] font-semibold ${getConnectionClasses(
                 connectionStatus,
               )}`}
             >
@@ -568,7 +569,7 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
             </span>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-[230px_minmax(520px,1fr)_230px] lg:items-center 2xl:grid-cols-[260px_minmax(620px,1fr)_260px]">
+          <div className="grid gap-5 lg:grid-cols-[230px_minmax(620px,1fr)_230px] lg:items-center xl:gap-6 2xl:grid-cols-[260px_minmax(760px,1fr)_260px]">
             <SeatColumn seats={arrangedSeats.left} />
 
             <div className="min-w-0">
@@ -613,9 +614,11 @@ export function PokerTable({ initialLobby, currentUserId }: PokerTableProps) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm">
-      <p className="text-sm text-zinc-600">{label}</p>
-      <p className="mt-2 text-xl font-semibold text-zinc-950">{value}</p>
+    <div className="border-4 border-[#f8f8f2] bg-[#111827] p-3 text-[#f8f8f2]">
+      <p className="text-[9px] text-[#9ca3af]">{label}</p>
+      <p className="mt-2 text-xs font-semibold text-[#f8f8f2] md:text-sm">
+        {value}
+      </p>
     </div>
   );
 }
@@ -626,7 +629,7 @@ function SeatColumn({ seats }: { seats: SeatView[] }) {
   }
 
   return (
-    <div className="grid gap-4 xl:gap-5">
+    <div className="grid gap-4 xl:gap-6">
       {seats.map((seat) => (
         <PlayerSeat key={seat.id} seat={seat} />
       ))}
@@ -640,7 +643,7 @@ function SeatRow({ seats }: { seats: SeatView[] }) {
   }
 
   return (
-    <div className="my-4 grid gap-3 sm:grid-cols-2 xl:my-5 xl:gap-5">
+    <div className="my-5 grid gap-4 sm:grid-cols-2 xl:my-6 xl:gap-6">
       {seats.map((seat) => (
         <PlayerSeat key={seat.id} seat={seat} />
       ))}
@@ -659,30 +662,30 @@ function PlayerSeat({ seat }: { seat: SeatView }) {
 
   return (
     <div
-      className={`relative rounded-lg border p-3 shadow-lg transition duration-200 ${
+      className={`relative border-4 p-3 ${
         seat.isTurn
-          ? "animate-[active-seat-glow_1.7s_ease-in-out_infinite] border-amber-300 bg-amber-100 text-zinc-950 shadow-[0_0_28px_rgba(251,191,36,0.55)] ring-2 ring-amber-300/80"
+          ? "border-[#ffd166] bg-[#ffd166] text-[#0b1020] outline outline-4 outline-offset-4 outline-[#ff3864]"
           : seat.isRevealed
-            ? "border-amber-300/70 bg-amber-950/80 text-white shadow-amber-950/30"
+            ? "border-[#ffd166] bg-[#5a3e1b] text-[#f8f8f2]"
           : seat.isViewer
-            ? "border-cyan-300/50 bg-cyan-950/70 text-white shadow-cyan-950/30"
-            : "border-white/10 bg-white/[0.08] text-white"
+            ? "border-[#29adff] bg-[#1d2b53] text-[#f8f8f2]"
+            : "border-[#f8f8f2] bg-[#111827] text-[#f8f8f2]"
       } ${seat.folded ? "opacity-70" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{seat.name}</p>
           <p
-            className={`mt-1 text-xs ${
-              seat.isTurn ? "text-zinc-700" : "text-zinc-300"
+            className={`mt-2 text-[9px] ${
+              seat.isTurn ? "text-[#1f2937]" : "text-[#9ca3af]"
             }`}
           >
             Seat {seat.seat ?? "-"}
           </p>
         </div>
         <span
-          className={`mt-1 h-2.5 w-2.5 rounded-full ${
-            seat.isOnline ? "bg-emerald-400" : "bg-zinc-500"
+          className={`mt-1 h-3 w-3 border-2 border-[#0b1020] ${
+            seat.isOnline ? "bg-[#7cff6b]" : "bg-[#6b7280]"
           }`}
           title={seat.isOnline ? "Online" : "Away"}
         />
@@ -702,10 +705,10 @@ function PlayerSeat({ seat }: { seat: SeatView }) {
           <HoleCards seat={seat} />
         </div>
         <span
-          className={`rounded-full border px-2 py-1 text-xs font-semibold ${
+          className={`border-2 px-2 py-1 text-[9px] font-semibold ${
             seat.isTurn
-              ? "border-zinc-300 bg-white/70 text-zinc-800"
-              : "border-white/10 bg-black/20 text-zinc-200"
+              ? "border-[#0b1020] bg-[#f8f8f2] text-[#0b1020]"
+              : "border-[#f8f8f2] bg-[#0b1020] text-[#f8f8f2]"
           }`}
         >
           {seat.isTurn ? "Acting" : statusLabel}
@@ -726,11 +729,11 @@ function SeatStat({
 }) {
   return (
     <div
-      className={`rounded-md border px-2 py-1.5 ${
-        isTurn ? "border-zinc-300 bg-white/70" : "border-white/10 bg-black/20"
+      className={`border-2 px-2 py-1.5 ${
+        isTurn ? "border-[#0b1020] bg-[#f8f8f2]" : "border-[#f8f8f2] bg-[#0b1020]"
       }`}
     >
-      <p className={isTurn ? "text-zinc-600" : "text-zinc-400"}>{label}</p>
+      <p className={isTurn ? "text-[#374151]" : "text-[#9ca3af]"}>{label}</p>
       <p className="mt-0.5 font-semibold">{value}</p>
     </div>
   );
@@ -776,34 +779,36 @@ function TableFelt({
   const boardCards = tableState?.board ?? [];
 
   return (
-    <div className="relative overflow-hidden rounded-[44px] border border-emerald-200/20 bg-[radial-gradient(circle_at_center,#167044_0%,#0f5136_48%,#063528_100%)] px-4 py-9 shadow-[inset_0_0_70px_rgba(0,0,0,0.45)] md:px-8 md:py-12 xl:rounded-[58px] xl:px-10 xl:py-14">
-      <div className="absolute inset-5 rounded-[36px] border border-white/10 xl:inset-7 xl:rounded-[48px]" />
+    <div className="relative overflow-hidden border-4 border-[#f8f8f2] bg-[#0f7f3f] px-4 py-10 md:px-8 md:py-14 xl:px-12 xl:py-16">
+      <div className="absolute inset-5 border-4 border-[#0b1020] xl:inset-7" />
       {handComplete ? (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-zinc-950/65 p-4 backdrop-blur-sm">
-          <div className="max-w-lg animate-[winner-pop_260ms_ease-out] rounded-lg border border-amber-200 bg-zinc-950 px-6 py-5 text-center shadow-2xl shadow-black/60">
-            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-md bg-amber-400 text-zinc-950">
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#0b1020]/90 p-4">
+          <div className="max-w-2xl animate-[winner-pop_160ms_steps(2,end)] border-4 border-[#ffd166] bg-[#111827] px-6 py-5 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center border-4 border-[#0b1020] bg-[#ffd166] text-[#0b1020]">
               <Trophy className="h-6 w-6" aria-hidden="true" />
             </div>
-            <p className="text-xs font-semibold uppercase text-amber-200">
+            <p className="text-[10px] font-semibold uppercase text-[#ffd166]">
               Hand Complete
             </p>
-            <p className="mt-2 text-2xl font-semibold text-white">
+            <p className="mt-4 text-sm font-semibold text-[#f8f8f2] md:text-base">
               {getHandCompleteTitle(handComplete)}
             </p>
-            <p className="mt-2 text-base font-medium text-zinc-100">
-              {getHandCompleteSubtitle(handComplete)}
+            <p className="mt-4 border-2 border-[#f8f8f2] bg-[#0b1020] px-3 py-2 text-[10px] font-medium leading-5 text-[#a3e635]">
+              HAND: {getHandCompleteSubtitle(handComplete)}
             </p>
           </div>
         </div>
       ) : null}
-      <div className="relative z-10 flex min-h-[320px] flex-col items-center justify-center gap-7 text-center xl:min-h-[390px]">
-        <div className="inline-flex items-center gap-3 rounded-lg border border-amber-200/30 bg-zinc-950/55 px-4 py-3 shadow-lg">
-          <CircleDollarSign className="h-5 w-5 text-amber-200" aria-hidden="true" />
+      <div className="relative z-10 flex min-h-[360px] flex-col items-center justify-center gap-8 text-center xl:min-h-[520px]">
+        <div className="inline-flex items-center gap-3 border-4 border-[#0b1020] bg-[#ffd166] px-5 py-4 text-[#0b1020]">
+          <span className="border-2 border-[#0b1020] bg-[#f8f8f2] px-2 py-1 text-[10px]">
+            CHIP
+          </span>
           <div className="text-left">
-            <p className="text-xs font-semibold uppercase text-amber-100">
+            <p className="text-[9px] font-semibold uppercase">
               Total Pot
             </p>
-            <p className="text-2xl font-semibold text-white">
+            <p className="mt-1 text-sm font-semibold md:text-base">
               {formatChips(tableState?.pot.total ?? 0)}
             </p>
           </div>
@@ -819,12 +824,12 @@ function TableFelt({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
-          <span className="rounded-full border border-white/15 bg-black/20 px-3 py-1 font-semibold text-white">
+        <div className="flex flex-wrap items-center justify-center gap-2 text-[10px]">
+          <span className="border-2 border-[#0b1020] bg-[#f8f8f2] px-3 py-2 font-semibold text-[#0b1020]">
             {tableState ? phaseLabels[tableState.phase] : "Waiting"}
           </span>
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/20 px-3 py-1 text-zinc-200">
-            <Radio className="h-3.5 w-3.5 text-amber-200" aria-hidden="true" />
+          <span className="inline-flex items-center gap-2 border-2 border-[#0b1020] bg-[#111827] px-3 py-2 text-[#f8f8f2]">
+            <Radio className="h-3.5 w-3.5 text-[#ffd166]" aria-hidden="true" />
             {activeTurnName ?? "No active turn"}
           </span>
         </div>
@@ -845,15 +850,20 @@ function PlayingCard({
   compact?: boolean;
 }) {
   const sizeClasses = compact
-    ? "h-14 w-10 text-sm"
-    : "h-20 w-14 text-base md:h-24 md:w-16 md:text-lg";
+    ? "h-16 w-11 text-[10px]"
+    : "h-24 w-16 text-xs md:h-28 md:w-20 md:text-sm";
 
   if (hidden) {
     return (
       <div
-        className={`${sizeClasses} flex shrink-0 animate-[deal-card_220ms_ease-out] items-center justify-center rounded-md border border-cyan-200/30 bg-[linear-gradient(135deg,#0f172a_0%,#0f766e_100%)] p-1 shadow-md transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:animate-none`}
+        className={`${sizeClasses} flex shrink-0 animate-[deal-card_120ms_steps(2,end)] items-center justify-center border-4 border-[#f8f8f2] bg-[#1d2b53] p-1 motion-reduce:animate-none`}
       >
-        <div className="h-full w-full rounded border border-white/20 bg-white/10" />
+        <div className="grid h-full w-full grid-cols-2 border-2 border-[#29adff]">
+          <span className="bg-[#29adff]" />
+          <span className="bg-[#1d2b53]" />
+          <span className="bg-[#1d2b53]" />
+          <span className="bg-[#29adff]" />
+        </div>
       </div>
     );
   }
@@ -861,7 +871,7 @@ function PlayingCard({
   if (!card || placeholder) {
     return (
       <div
-        className={`${sizeClasses} shrink-0 rounded-md border border-dashed border-white/20 bg-white/10 shadow-inner transition-colors duration-200`}
+        className={`${sizeClasses} shrink-0 border-4 border-dashed border-[#0b1020] bg-[#4b5563]`}
       />
     );
   }
@@ -871,12 +881,12 @@ function PlayingCard({
 
   return (
     <div
-      className={`${sizeClasses} flex shrink-0 flex-col justify-between rounded-md border border-zinc-200 bg-white p-1.5 font-bold shadow-md ${
-        isRed ? "text-rose-600" : "text-zinc-950"
-      } animate-[deal-card_220ms_ease-out] transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:animate-none`}
+      className={`${sizeClasses} flex shrink-0 animate-[deal-card_120ms_steps(2,end)] flex-col justify-between border-4 border-[#0b1020] bg-[#f8f8f2] p-1.5 font-bold ${
+        isRed ? "text-[#d72638]" : "text-[#0b1020]"
+      } motion-reduce:animate-none`}
     >
       <span className="leading-none">{rank}</span>
-      <span className="self-center text-xl leading-none md:text-2xl">
+      <span className="self-center text-xl leading-none md:text-3xl">
         {suitSymbols[card.suit]}
       </span>
       <span className="self-end leading-none">{rank}</span>
@@ -894,54 +904,68 @@ function formatLogTime(value: string) {
 
 function getLogToneClasses(tone: PublicGameLogEntry["tone"]) {
   if (tone === "award") {
-    return "border-amber-300/30 bg-amber-400/10 text-amber-100";
+    return "border-[#ffd166] bg-[#4a3517] text-[#ffd166]";
   }
 
   if (tone === "showdown") {
-    return "border-cyan-300/30 bg-cyan-400/10 text-cyan-100";
+    return "border-[#29adff] bg-[#1d2b53] text-[#29adff]";
   }
 
   if (tone === "deal") {
-    return "border-emerald-300/30 bg-emerald-400/10 text-emerald-100";
+    return "border-[#7cff6b] bg-[#173f1f] text-[#7cff6b]";
   }
 
-  return "border-white/10 bg-white/[0.06] text-zinc-100";
+  return "border-[#f8f8f2] bg-[#111827] text-[#f8f8f2]";
 }
 
 function ActionLogPanel({ events }: { events: PublicGameLogEntry[] }) {
   const visibleEvents = events.slice(-18);
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const logElement = logScrollRef.current;
+
+    if (!logElement) {
+      return;
+    }
+
+    logElement.scrollTop = logElement.scrollHeight;
+  }, [visibleEvents.length]);
 
   return (
-    <aside className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-white shadow-xl shadow-zinc-950/20">
+    <aside className="border-4 border-[#f8f8f2] bg-[#111827] p-4 text-[#f8f8f2]">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Action Log</h2>
-          <p className="mt-1 text-sm text-zinc-400">Current hand</p>
+          <h2 className="text-xs font-semibold">Action Log</h2>
+          <p className="mt-2 text-[9px] text-[#9ca3af]">Current hand</p>
         </div>
-        <div className="rounded-md bg-zinc-900 p-2 text-emerald-200">
+        <div className="border-2 border-[#7cff6b] bg-[#173f1f] p-2 text-[#7cff6b]">
           <ScrollText className="h-5 w-5" aria-hidden="true" />
         </div>
       </div>
 
-      <div className="mt-4 max-h-64 space-y-2 overflow-y-auto pr-1">
+      <div
+        ref={logScrollRef}
+        className="mt-4 max-h-72 space-y-2 overflow-y-auto border-2 border-[#0b1020] bg-[#0b1020] p-2"
+      >
         {visibleEvents.length > 0 ? (
           visibleEvents.map((event) => (
             <div
               key={event.id}
-              className={`rounded-md border px-3 py-2 text-sm ${getLogToneClasses(
+              className={`border-2 px-3 py-2 text-[9px] leading-5 ${getLogToneClasses(
                 event.tone,
               )}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <p className="leading-5">{event.message}</p>
-                <time className="shrink-0 text-xs text-zinc-400">
+                <time className="shrink-0 text-[8px] text-[#9ca3af]">
                   {formatLogTime(event.at)}
                 </time>
               </div>
             </div>
           ))
         ) : (
-          <div className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm text-zinc-400">
+          <div className="border-2 border-[#f8f8f2] bg-[#111827] p-4 text-[10px] text-[#9ca3af]">
             No actions yet
           </div>
         )}
@@ -952,13 +976,13 @@ function ActionLogPanel({ events }: { events: PublicGameLogEntry[] }) {
 
 function HandHistoryPanel({ hands }: { hands: PublicHandHistoryEntry[] }) {
   return (
-    <aside className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-white shadow-xl shadow-zinc-950/20">
+    <aside className="border-4 border-[#f8f8f2] bg-[#111827] p-4 text-[#f8f8f2]">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Hand History</h2>
-          <p className="mt-1 text-sm text-zinc-400">Last 3 hands</p>
+          <h2 className="text-xs font-semibold">Hand History</h2>
+          <p className="mt-2 text-[9px] text-[#9ca3af]">Last 3 hands</p>
         </div>
-        <div className="rounded-md bg-zinc-900 p-2 text-amber-200">
+        <div className="border-2 border-[#ffd166] bg-[#4a3517] p-2 text-[#ffd166]">
           <History className="h-5 w-5" aria-hidden="true" />
         </div>
       </div>
@@ -978,21 +1002,21 @@ function HandHistoryPanel({ hands }: { hands: PublicHandHistoryEntry[] }) {
             return (
               <div
                 key={hand.handNumber}
-                className="rounded-md border border-white/10 bg-white/[0.06] p-3 text-sm"
+                className="border-2 border-[#f8f8f2] bg-[#0b1020] p-3 text-[10px]"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold text-white">Hand {hand.handNumber}</p>
-                  <p className="text-xs font-semibold text-amber-200">
+                  <p className="font-semibold text-[#f8f8f2]">Hand {hand.handNumber}</p>
+                  <p className="text-[9px] font-semibold text-[#ffd166]">
                     {formatChips(hand.potSize)}
                   </p>
                 </div>
-                <p className="mt-2 text-zinc-200">{winnerText}</p>
-                <p className="mt-1 text-xs text-zinc-400">{handText}</p>
+                <p className="mt-2 text-[#f8f8f2]">{winnerText}</p>
+                <p className="mt-2 text-[9px] leading-4 text-[#a3e635]">{handText}</p>
               </div>
             );
           })
         ) : (
-          <div className="rounded-md border border-white/10 bg-white/[0.04] p-4 text-sm text-zinc-400">
+          <div className="border-2 border-[#f8f8f2] bg-[#0b1020] p-4 text-[10px] text-[#9ca3af]">
             No completed hands yet
           </div>
         )}
@@ -1048,11 +1072,11 @@ function ActionPanel({
       : minimumRaiseTo;
 
   return (
-    <aside className="rounded-lg border border-zinc-800 bg-zinc-950 p-5 text-white shadow-xl shadow-zinc-950/20">
+    <aside className="border-4 border-[#f8f8f2] bg-[#111827] p-4 text-[#f8f8f2]">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-white">Action</h2>
-          <p className="mt-1 text-sm text-zinc-400">
+          <h2 className="text-xs font-semibold text-[#f8f8f2]">Action</h2>
+          <p className="mt-2 text-[9px] text-[#9ca3af]">
             {hasStarted
               ? tableState
                 ? phaseLabels[tableState.phase]
@@ -1060,8 +1084,8 @@ function ActionPanel({
               : "Waiting to start"}
           </p>
         </div>
-        <div className="rounded-md bg-amber-400 p-2 text-zinc-950">
-          <CircleDollarSign className="h-5 w-5" aria-hidden="true" />
+        <div className="border-2 border-[#0b1020] bg-[#ffd166] px-2 py-2 text-[9px] text-[#0b1020]">
+          CHIP
         </div>
       </div>
 
@@ -1072,13 +1096,13 @@ function ActionPanel({
               type="button"
               onClick={onStartGame}
               disabled={!isConnected}
-              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
+              className="inline-flex h-12 w-full items-center justify-center gap-2 border-4 border-[#f8f8f2] bg-[#0f7f3f] px-4 text-[10px] font-semibold text-[#f8f8f2] hover:bg-[#7cff6b] hover:text-[#0b1020] disabled:cursor-not-allowed disabled:bg-[#4b5563] disabled:text-[#9ca3af]"
             >
               <Play className="h-4 w-4" aria-hidden="true" />
               Start Game
             </button>
           ) : (
-            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-sm font-medium text-zinc-300">
+            <div className="border-2 border-[#f8f8f2] bg-[#0b1020] p-4 text-[10px] font-medium text-[#9ca3af]">
               Waiting on the host
             </div>
           )}
@@ -1090,7 +1114,7 @@ function ActionPanel({
               type="button"
               onClick={onFold}
               disabled={!isConnected}
-              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md border border-rose-400/30 bg-rose-500/15 px-4 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-12 w-full items-center justify-center gap-2 border-4 border-[#ff3864] bg-[#451a1a] px-4 text-[10px] font-semibold text-[#fca5a5] hover:bg-[#ff3864] hover:text-[#0b1020] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <X className="h-4 w-4" aria-hidden="true" />
               Fold
@@ -1100,14 +1124,14 @@ function ActionPanel({
             type="button"
             onClick={onCheckOrCall}
             disabled={!isConnected}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+            className="inline-flex h-12 w-full items-center justify-center gap-2 border-4 border-[#7cff6b] bg-[#173f1f] px-4 text-[10px] font-semibold text-[#7cff6b] hover:bg-[#7cff6b] hover:text-[#0b1020] disabled:cursor-not-allowed disabled:bg-[#4b5563] disabled:text-[#9ca3af]"
           >
             <Check className="h-4 w-4" aria-hidden="true" />
             {amountToCall > 0 ? `Call ${formatChips(amountToCall)}` : "Check"}
           </button>
-          <form onSubmit={onRaiseSubmit} className="rounded-lg border border-white/10 bg-white/[0.06] p-3">
+          <form onSubmit={onRaiseSubmit} className="border-4 border-[#f8f8f2] bg-[#0b1020] p-3">
             <label
-              className="block text-sm font-medium text-zinc-200"
+              className="block text-[10px] font-medium text-[#f8f8f2]"
               htmlFor="raise-to"
             >
               Raise to
@@ -1119,7 +1143,7 @@ function ActionPanel({
                     key={target.label}
                     type="button"
                     onClick={() => onQuickBet(target.totalBet)}
-                    className="h-9 rounded-md border border-white/10 bg-zinc-900 px-2 text-xs font-semibold text-zinc-100 transition hover:border-amber-300/70 hover:text-amber-100"
+                    className="h-10 border-2 border-[#ffd166] bg-[#4a3517] px-2 text-[8px] font-semibold text-[#ffd166] hover:bg-[#ffd166] hover:text-[#0b1020]"
                   >
                     {target.label}
                   </button>
@@ -1136,12 +1160,12 @@ function ActionPanel({
                 value={raiseTo}
                 disabled={!canRaise}
                 onChange={(event) => setRaiseTo(event.target.value)}
-                className="h-11 min-w-0 flex-1 rounded-md border border-white/10 bg-zinc-900 px-3 text-sm text-white outline-none transition focus:border-amber-300/70 focus:ring-2 focus:ring-amber-300/20 disabled:cursor-not-allowed disabled:bg-zinc-900/50 disabled:text-zinc-500"
+                className="h-12 min-w-0 flex-1 border-4 border-[#f8f8f2] bg-[#111827] px-3 text-[10px] text-[#f8f8f2] outline-none focus:border-[#ffd166] disabled:cursor-not-allowed disabled:border-[#4b5563] disabled:bg-[#1f2937] disabled:text-[#6b7280]"
               />
               <button
                 type="submit"
                 disabled={!isConnected || !canRaise}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-amber-400 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+                className="inline-flex h-12 items-center justify-center gap-2 border-4 border-[#ffd166] bg-[#4a3517] px-4 text-[10px] font-semibold text-[#ffd166] hover:bg-[#ffd166] hover:text-[#0b1020] disabled:cursor-not-allowed disabled:border-[#4b5563] disabled:bg-[#1f2937] disabled:text-[#6b7280]"
               >
                 <ArrowUp className="h-4 w-4" aria-hidden="true" />
                 Raise
@@ -1150,22 +1174,22 @@ function ActionPanel({
           </form>
         </div>
       ) : (
-        <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.06] p-4 text-sm font-medium text-zinc-300">
+        <div className="mt-5 border-2 border-[#f8f8f2] bg-[#0b1020] p-4 text-[10px] font-medium text-[#9ca3af]">
           {tableState?.currentTurnPlayerId ? "Waiting for action" : "Hand settled"}
         </div>
       )}
 
       {tableState?.pot.awards.length ? (
         <div className="mt-5 space-y-2">
-          <h3 className="text-sm font-semibold text-white">Awards</h3>
+          <h3 className="text-[10px] font-semibold text-[#f8f8f2]">Awards</h3>
           {tableState.pot.awards.map((award, index) => (
             <div
               key={`${award.amount}-${index}`}
-              className="rounded-lg border border-amber-300/30 bg-amber-400/10 p-3 text-sm text-amber-100"
+              className="border-2 border-[#ffd166] bg-[#4a3517] p-3 text-[10px] text-[#ffd166]"
             >
               <p className="font-semibold">{formatChips(award.amount)} pot</p>
               {award.handDescription ? (
-                <p className="mt-1 text-amber-200">{award.handDescription}</p>
+                <p className="mt-2 leading-4 text-[#f8f8f2]">{award.handDescription}</p>
               ) : null}
             </div>
           ))}
