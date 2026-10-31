@@ -1,0 +1,23 @@
+{
+  "name": "@poker-platform/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "bench": "tsx scripts/bench.ts",
+    "verify:7card": "tsx scripts/verify-7card.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@poker-platform/shared": "0.1.0",
+    "pokersolver": "^2.1.4",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.0"
+  }
+}
