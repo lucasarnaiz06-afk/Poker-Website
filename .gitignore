@@ -23,3 +23,7 @@ coverage/
 
 # local database artifacts
 server/prisma/migrations/dev.db
+
+# e2e (Playwright)
+e2e/test-results/
+e2e/playwright-report/

@@ -9,16 +9,37 @@
     "./auth/cookies": "./src/auth/cookies.ts",
     "./db": "./src/db/prisma.ts",
     "./lobbies": "./src/lobbies/index.ts",
-    "./types": "./src/types/index.ts"
+    "./lobbies/client": "./src/lobbies/client.ts",
+    "./types": "./src/types/index.ts",
+    "./accounts": "./src/accounts/index.ts",
+    "./accounts/avatars": "./src/accounts/avatars.ts",
+    "./accounts/preferences": "./src/accounts/preferences.ts",
+    "./accounts/username": "./src/accounts/username.ts",
+    "./users": "./src/users/index.ts",
+    "./wallet": "./src/wallet/index.ts",
+    "./hands/persist": "./src/hands/persist.ts",
+    "./hands": "./src/hands/index.ts",
+    "./hands/client": "./src/hands/client.ts",
+    "./hands/deck-proof-node": "./src/hands/deck-proof-node.ts",
+    "./stats": "./src/stats/index.ts",
+    "./stats/client": "./src/stats/client.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@prisma/client": "^6.0.0"
+    "@node-rs/argon2": "^2.2.2",
+    "@poker-platform/engine": "0.1.0",
+    "@prisma/client": "^6.0.0",
+    "nodemailer": "^7.0.13",
+    "otpauth": "^9.5.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.6.0"
+    "@types/nodemailer": "^8.0.2",
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.5"
   }
 }

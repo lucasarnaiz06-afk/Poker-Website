@@ -8,18 +8,23 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "npm run prisma:generate",
     "dev:client": "npm run dev --workspace client",
     "dev:server": "npm run dev --workspace server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "test:engine": "npm run test:engine --workspace server",
-    "test:runtime": "npm run test:runtime --workspace server",
+    "test:engine": "npm test --workspace packages/engine",
+    "test:runtime": "npm test --workspace server",
     "smtp:verify": "node scripts/verify-smtp.mjs",
     "prisma:generate": "prisma generate --schema server/prisma/schema.prisma",
     "prisma:migrate": "prisma migrate dev --schema server/prisma/schema.prisma",
-    "prisma:studio": "prisma studio --schema server/prisma/schema.prisma"
+    "prisma:studio": "prisma studio --schema server/prisma/schema.prisma",
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2e:install": "playwright install chromium",
+    "e2e:typecheck": "tsc -p e2e/tsconfig.json"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "prisma": "^6.0.0",
     "typescript": "^5.6.0"
   }
