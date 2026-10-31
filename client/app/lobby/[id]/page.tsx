@@ -1,70 +1,42 @@
-import { getWaitingRoomLobbyForUser, LobbyServiceError } from "@poker-platform/shared/lobbies";
-import { ArrowLeft, Lock } from "lucide-react";
-import Link from "next/link";
+import { joinLobbyForUser, LobbyServiceError } from "@poker-platform/shared/lobbies";
 import { redirect } from "next/navigation";
-import { SignOutButton } from "@/components/auth/sign-out-button";
-import { PokerTable } from "@/components/lobby/poker-table";
+import { LiveTableProvider, TableScreen } from "@/components/table";
 import { requireCurrentSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
-type WaitingRoomPageProps = {
-  params: {
-    id: string;
-  };
+type TablePageProps = {
+  params: { id: string };
+  searchParams?: { sit?: string | string[] };
 };
 
-function redirectWithLobbyError(message: string): never {
-  redirect(`/lobby?error=${encodeURIComponent(message)}`);
-}
-
-export default async function WaitingRoomPage({ params }: WaitingRoomPageProps) {
+export default async function TablePage({ params, searchParams }: TablePageProps) {
   const session = await requireCurrentSession();
-  let lobby;
+  let lobbyId: string;
+  let inviteCode: string | null = null;
 
   try {
-    lobby = await getWaitingRoomLobbyForUser(params.id, session.user.id);
+    // Members go straight back to the table; public tables admit anyone; private ones need the invite link.
+    const lobby = await joinLobbyForUser(
+      {
+        id: session.user.id,
+        name: session.user.name ?? null,
+        email: session.user.email ?? null,
+        image: session.user.image ?? null,
+      },
+      { lobbyId: params.id },
+    );
+    lobbyId = lobby.id;
+    // Private tables share the invite link from the table's menu; public ones share the table URL.
+    inviteCode = lobby.visibility === "PRIVATE" ? lobby.inviteCode : null;
   } catch (error) {
-    if (error instanceof LobbyServiceError) {
-      redirectWithLobbyError(error.message);
-    }
-
-    redirectWithLobbyError("Lobby could not be loaded.");
+    const message = error instanceof LobbyServiceError ? error.message : "That table couldn't be opened.";
+    redirect(`/lobby?error=${encodeURIComponent(message)}`);
   }
 
   return (
-    <main className="min-h-screen bg-[#0b1020] px-4 py-5 text-[#f8f8f2] md:px-6">
-      <div className="mx-auto flex max-w-[1800px] flex-col gap-5">
-        <header className="flex flex-col gap-4 border-b-4 border-[#f8f8f2] pb-5 md:flex-row md:items-center md:justify-between">
-          <div>
-            <Link
-              href="/lobby"
-              className="mb-3 inline-flex items-center gap-2 border-2 border-[#f8f8f2] bg-[#111827] px-3 py-2 text-[10px] font-semibold text-[#f8f8f2] hover:bg-[#f8f8f2] hover:text-[#111827]"
-            >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-              Lobby
-            </Link>
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-lg font-semibold tracking-normal text-[#f8f8f2] md:text-2xl">
-                {lobby.name}
-              </h1>
-              {lobby.visibility === "PRIVATE" ? (
-                <span className="inline-flex items-center gap-1 border-2 border-[#f8f8f2] px-2 py-1 text-[10px] font-semibold text-[#f8f8f2]">
-                  <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                  Private
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-2 text-[10px] text-[#9ca3af]">ID {lobby.id}</p>
-          </div>
-          <SignOutButton />
-        </header>
-
-        <PokerTable
-          initialLobby={lobby}
-          currentUserId={session.user.id}
-        />
-      </div>
-    </main>
+    <LiveTableProvider tableId={lobbyId}>
+      <TableScreen inviteCode={inviteCode} autoSit={searchParams?.sit === "1"} />
+    </LiveTableProvider>
   );
 }

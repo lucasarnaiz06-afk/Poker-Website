@@ -1,68 +1,123 @@
-@import url("https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap");
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/* Design tokens (RGB triplets so Tailwind can apply alpha). Dark is the default theme. */
+:root,
+[data-theme="dark"] {
   color-scheme: dark;
-  background: #0b1020;
-  color: #f8f8f2;
+  --bg: 10 12 16;
+  --surface: 17 20 26;
+  --surface-2: 24 28 35;
+  --surface-3: 33 38 47;
+  --line: 41 47 57;
+  --fg: 234 236 240;
+  --muted: 154 163 175;
+  --subtle: 122 130 144;
+  --accent: 16 185 129;
+  --accent-fg: 4 24 17;
+  --gold: 245 196 81;
+  --danger: 239 68 68;
+  --warning: 245 158 11;
+  --info: 96 165 250;
+  --felt: 21 94 62;
+  --felt-dark: 9 48 32;
+  --rail: 22 25 31;
+  --suit-red: 220 38 38;
+  --suit-black: 17 24 39;
+  --suit-blue: 37 99 235;
+  --suit-green: 22 163 74;
+  --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 40px rgb(0 0 0 / 0.35);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.04), 0 12px 32px rgb(0 0 0 / 0.5);
 }
 
-*,
-*::before,
-*::after {
-  border-radius: 0 !important;
-  box-shadow: none !important;
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: 246 247 249;
+  --surface: 255 255 255;
+  --surface-2: 241 243 246;
+  --surface-3: 229 232 237;
+  --line: 222 226 232;
+  --fg: 17 20 26;
+  --muted: 88 96 110;
+  --subtle: 110 118 132;
+  --accent: 4 120 87;
+  --accent-fg: 255 255 255;
+  --gold: 180 120 10;
+  --danger: 210 40 40;
+  --warning: 190 100 5;
+  --info: 37 99 235;
+  --rail: 30 34 41;
+  --shadow-panel: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 16px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 0 0 1px rgb(16 24 40 / 0.04), 0 12px 32px rgb(16 24 40 / 0.14);
 }
 
-html {
-  font-family: "Press Start 2P", ui-monospace, SFMono-Regular, Menlo, Monaco,
-    Consolas, "Liberation Mono", "Courier New", monospace;
-}
-
-body {
-  min-height: 100vh;
-  background: #0b1020;
-  color: #f8f8f2;
-  letter-spacing: 0;
-  -webkit-font-smoothing: none;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-button,
-input {
-  font: inherit;
-}
-
-img,
-canvas,
-svg {
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-}
-
-@keyframes deal-card {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
+@layer base {
+  html {
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
+  body {
+    @apply min-h-screen bg-bg text-fg;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  /* Hide number spinners; NumberInput provides its own steppers. */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent));
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.3);
   }
 }
 
-@keyframes winner-pop {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
+  .pixelated {
+    image-rendering: pixelated;
+  }
+
+  /* Horizontally scrollable rows (filter chips) without a visible scrollbar. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

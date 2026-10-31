@@ -1,16 +1,28 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma";
+import { checkRateLimit, formatRetryAfter, recordRateLimitAttempt, type RateLimitPolicy } from "../auth/rate-limit";
 import type { AuthenticatedUser } from "../auth/session";
-import type {
-  CreateLobbyInput,
-  JoinLobbyInput,
-  LobbyPlayerSummary,
-  LobbySummary,
-  LobbyVisibility,
-} from "../types/lobby";
+import type { JoinLobbyInput, LobbyPlayerSummary, LobbyStatus, LobbySummary } from "../types/lobby";
+import type { LobbyTableSummary, TableStatus } from "../types/table-view";
+import { generateInviteCode } from "./invite-codes";
+import { isValidInviteCode } from "./invite-link";
 import { hashPassword, verifyPassword } from "./passwords";
+import { createGameInputSchema, readStoredTableSettings, type CreateGameInput } from "./settings-schema";
+import { mostCommon } from "./quick-seat";
+import { getTableFeatures } from "./table-features";
 
 const ACTIVE_PLAYER_STATUSES = ["JOINED", "SEATED"] as const;
+
+/** Wrong table-password attempts per user before a growing lockout. */
+const TABLE_PASSWORD_RATE_LIMIT: RateLimitPolicy = {
+  windowMs: 15 * 60_000,
+  freeAttempts: 10,
+  baseLockMs: 30_000,
+  maxLockMs: 15 * 60_000,
+};
+
+/** Abuse guard: how many WAITING/ACTIVE tables one user may host at a time. */
+export const MAX_OPEN_TABLES_PER_HOST = 10;
 
 export type PersistCompletedHandInput = {
   lobbyId: string;
@@ -29,9 +41,7 @@ export type PersistCompletedHandInput = {
   }>;
 };
 
-type LobbyWithPlayers = NonNullable<
-  Awaited<ReturnType<typeof findLobbyWithPlayers>>
->;
+type LobbyWithPlayers = NonNullable<Awaited<ReturnType<typeof findLobbyWithPlayers>>>;
 
 export class LobbyServiceError extends Error {
   constructor(
@@ -51,111 +61,39 @@ function readString(value: unknown, fallback = "") {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
-function readInteger(value: unknown, fallback: number) {
-  const parsed = typeof value === "number" ? value : Number(value);
+function validateCreateGameInput(input: unknown): CreateGameInput {
+  const parsed = createGameInputSchema.safeParse(input);
 
-  return Number.isInteger(parsed) ? parsed : fallback;
-}
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
 
-function validateVisibility(value: unknown): LobbyVisibility {
-  return value === "PRIVATE" ? "PRIVATE" : "PUBLIC";
-}
-
-function validateLobbyInput(input: unknown): CreateLobbyInput {
-  if (!isRecord(input)) {
-    throw new LobbyServiceError("INVALID_INPUT", "Lobby details are required.");
+    throw new LobbyServiceError("INVALID_INPUT", issue?.message ?? "Game settings are invalid.");
   }
 
-  const name = readString(input.name);
-  const visibility = validateVisibility(input.visibility);
-  const password = readString(input.password);
-  const smallBlind = readInteger(input.smallBlind, 5);
-  const bigBlind = readInteger(input.bigBlind, 10);
-  const minBuyIn = readInteger(input.minBuyIn, bigBlind * 20);
-  const maxBuyIn = readInteger(input.maxBuyIn, bigBlind * 100);
-  const maxPlayers = readInteger(input.maxPlayers, 6);
-
-  if (name.length < 3 || name.length > 80) {
-    throw new LobbyServiceError(
-      "INVALID_NAME",
-      "Lobby name must be between 3 and 80 characters.",
-    );
-  }
-
-  if (visibility === "PRIVATE" && password.length < 4) {
-    throw new LobbyServiceError(
-      "INVALID_PASSWORD",
-      "Private lobby passwords must be at least 4 characters.",
-    );
-  }
-
-  if (maxPlayers < 2 || maxPlayers > 9) {
-    throw new LobbyServiceError(
-      "INVALID_MAX_PLAYERS",
-      "Lobbies must allow between 2 and 9 players.",
-    );
-  }
-
-  if (smallBlind <= 0 || bigBlind <= 0 || bigBlind < smallBlind) {
-    throw new LobbyServiceError(
-      "INVALID_BLINDS",
-      "Blinds must be positive, and big blind must be at least the small blind.",
-    );
-  }
-
-  if (minBuyIn < bigBlind || maxBuyIn < minBuyIn) {
-    throw new LobbyServiceError(
-      "INVALID_BUY_IN",
-      "Buy-ins must be positive, and max buy-in must be at least min buy-in.",
-    );
-  }
-
-  return {
-    name,
-    visibility,
-    password: visibility === "PRIVATE" ? password : undefined,
-    smallBlind,
-    bigBlind,
-    minBuyIn,
-    maxBuyIn,
-    maxPlayers,
-  };
+  return parsed.data;
 }
 
 function validateJoinInput(input: unknown): JoinLobbyInput {
   if (!isRecord(input)) {
-    throw new LobbyServiceError("INVALID_INPUT", "Lobby ID is required.");
+    throw new LobbyServiceError("INVALID_INPUT", "Choose a table first.");
   }
 
   const lobbyId = readString(input.lobbyId);
+  const inviteCode = readString(input.inviteCode);
 
-  if (!lobbyId) {
-    throw new LobbyServiceError("INVALID_LOBBY_ID", "Lobby ID is required.");
+  if (!lobbyId && !inviteCode) {
+    throw new LobbyServiceError("INVALID_LOBBY_ID", "Choose a table first.");
+  }
+
+  if (lobbyId.length > 64 || (inviteCode && !isValidInviteCode(inviteCode))) {
+    throw new LobbyServiceError("LOBBY_NOT_FOUND", "That table doesn't exist or has closed.");
   }
 
   return {
     lobbyId,
-    password: readString(input.password),
+    password: readString(input.password).slice(0, 128),
+    inviteCode: inviteCode || undefined,
   };
-}
-
-function findOpenSeat(
-  maxPlayers: number,
-  occupiedSeatNumbers: Array<number | null>,
-) {
-  const occupiedSeats = new Set(
-    occupiedSeatNumbers.filter((seatNumber): seatNumber is number =>
-      Number.isInteger(seatNumber),
-    ),
-  );
-
-  for (let seatNumber = 1; seatNumber <= maxPlayers; seatNumber += 1) {
-    if (!occupiedSeats.has(seatNumber)) {
-      return seatNumber;
-    }
-  }
-
-  throw new LobbyServiceError("LOBBY_FULL", "Lobby is full.");
 }
 
 async function findLobbyWithPlayers(lobbyId: string) {
@@ -179,19 +117,31 @@ async function findLobbyWithPlayers(lobbyId: string) {
   });
 }
 
-function toPlayerSummary(
-  player: LobbyWithPlayers["players"][number],
-): LobbyPlayerSummary {
+function toPlayerSummary(player: LobbyWithPlayers["players"][number]): LobbyPlayerSummary {
   return {
     id: player.id,
     userId: player.userId,
     name: player.user.name,
-    email: player.user.email,
+    // Never expose other players' emails (this summary is sent to everyone at the table).
+    email: null,
     seatNumber: player.seatNumber,
     stack: player.chipStack,
     status: player.status,
     joinedAt: player.joinedAt.toISOString(),
   };
+}
+
+type LobbySettingsRow = {
+  settings: Prisma.JsonValue;
+  smallBlind: number;
+  bigBlind: number;
+  minBuyIn: number;
+  maxBuyIn: number;
+  maxPlayers: number;
+};
+
+function settingsOf(lobby: LobbySettingsRow) {
+  return readStoredTableSettings(lobby.settings, lobby);
 }
 
 function toLobbySummary(lobby: LobbyWithPlayers): LobbySummary {
@@ -212,6 +162,147 @@ function toLobbySummary(lobby: LobbyWithPlayers): LobbySummary {
     updatedAt: lobby.updatedAt.toISOString(),
     playerCount: players.length,
     players,
+    settings: settingsOf(lobby),
+    hasPassword: lobby.passwordHash !== null,
+  };
+}
+
+const TABLE_STATUS_BY_LOBBY_STATUS: Record<LobbyStatus, TableStatus> = {
+  WAITING: "WAITING",
+  ACTIVE: "RUNNING",
+  CLOSED: "CLOSED",
+};
+
+type LobbyTableRow = LobbySettingsRow & {
+  id: string;
+  name: string;
+  visibility: LobbySummary["visibility"];
+  status: LobbyStatus;
+  passwordHash: string | null;
+  _count: { players: number };
+};
+
+const lobbyTableSelect = {
+  id: true,
+  name: true,
+  visibility: true,
+  status: true,
+  settings: true,
+  smallBlind: true,
+  bigBlind: true,
+  minBuyIn: true,
+  maxBuyIn: true,
+  maxPlayers: true,
+  passwordHash: true,
+  _count: {
+    select: {
+      players: { where: { status: { in: [...ACTIVE_PLAYER_STATUSES] } } },
+    },
+  },
+} satisfies Prisma.LobbySelect;
+
+function toLobbyTableSummary(lobby: LobbyTableRow): LobbyTableSummary {
+  const settings = settingsOf(lobby);
+
+  return {
+    tableId: lobby.id,
+    name: lobby.name,
+    variant: settings.variant,
+    smallBlind: lobby.smallBlind,
+    bigBlind: lobby.bigBlind,
+    minBuyIn: lobby.minBuyIn,
+    maxBuyIn: lobby.maxBuyIn,
+    maxPlayers: lobby.maxPlayers,
+    seated: lobby._count.players,
+    visibility: lobby.visibility,
+    status: TABLE_STATUS_BY_LOBBY_STATUS[lobby.status],
+    features: getTableFeatures(settings),
+    avgPot: null,
+    handsPerHour: null,
+    hasPassword: lobby.passwordHash !== null,
+    ante: settings.ante,
+  };
+}
+
+/** Public tables that can be joined from the lobby list, newest first. */
+export async function listLobbyTables(): Promise<LobbyTableSummary[]> {
+  const lobbies = await prisma.lobby.findMany({
+    where: { visibility: "PUBLIC", status: "WAITING" },
+    select: lobbyTableSelect,
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+
+  return lobbies.map(toLobbyTableSummary);
+}
+
+export type UserLobbyTable = LobbyTableSummary & {
+  inviteCode: string | null;
+  isHost: boolean;
+};
+
+/** Tables (any visibility, not closed) the user currently has a seat in. Includes invite codes. */
+export async function listUserLobbyTables(userId: string): Promise<UserLobbyTable[]> {
+  const lobbies = await prisma.lobby.findMany({
+    where: {
+      status: { in: ["WAITING", "ACTIVE"] },
+      players: { some: { userId, status: { in: [...ACTIVE_PLAYER_STATUSES] } } },
+    },
+    select: { ...lobbyTableSelect, inviteCode: true, createdByUserId: true },
+    orderBy: { updatedAt: "desc" },
+    take: 20,
+  });
+
+  return lobbies.map((lobby) => ({
+    ...toLobbyTableSummary(lobby),
+    inviteCode: lobby.inviteCode,
+    isHost: lobby.createdByUserId === userId,
+  }));
+}
+
+/** The big blind the user played most over their last 200 hands (null without history). */
+export async function getUsualBigBlind(userId: string): Promise<number | null> {
+  const rows = await prisma.handPlayer.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    select: { hand: { select: { bigBlind: true } } },
+  });
+
+  return mostCommon(rows.map((row) => row.hand.bigBlind));
+}
+
+export type InvitePreview = LobbyTableSummary & {
+  hostName: string | null;
+  isMember: boolean;
+};
+
+/** Looks up a table by invite code for the join page. Returns null for unknown codes or closed tables. */
+export async function getInvitePreview(inviteCode: string, userId: string): Promise<InvitePreview | null> {
+  if (!isValidInviteCode(inviteCode)) {
+    return null;
+  }
+
+  const lobby = await prisma.lobby.findUnique({
+    where: { inviteCode },
+    select: {
+      ...lobbyTableSelect,
+      createdBy: { select: { name: true } },
+      players: {
+        where: { userId, status: { in: [...ACTIVE_PLAYER_STATUSES] } },
+        select: { id: true },
+      },
+    },
+  });
+
+  if (!lobby || lobby.status === "CLOSED") {
+    return null;
+  }
+
+  return {
+    ...toLobbyTableSummary(lobby),
+    hostName: lobby.createdBy.name,
+    isMember: lobby.players.length > 0,
   };
 }
 
@@ -255,108 +346,150 @@ export async function getWaitingRoomLobbyForUser(lobbyId: string, userId: string
   const lobby = await getLobbySummary(lobbyId);
 
   if (!lobby) {
-    throw new LobbyServiceError("LOBBY_NOT_FOUND", "Lobby was not found.");
+    throw new LobbyServiceError("LOBBY_NOT_FOUND", "That table doesn't exist or has closed.");
   }
 
   const isPlayerInLobby = lobby.players.some((player) => player.userId === userId);
 
   if (!isPlayerInLobby) {
-    throw new LobbyServiceError(
-      "LOBBY_ACCESS_DENIED",
-      "Join the lobby before opening its waiting room.",
-    );
+    throw new LobbyServiceError("LOBBY_ACCESS_DENIED", "Join the table first.");
   }
 
-  return lobby;
-}
-
-export async function createLobbyForUser(
-  user: AuthenticatedUser,
-  rawInput: unknown,
-) {
-  const input = validateLobbyInput(rawInput);
-  const passwordHash =
-    input.visibility === "PRIVATE" && input.password
-      ? await hashPassword(input.password)
-      : null;
-
-  const lobby = await prisma.$transaction(async (tx) => {
-    const createdLobby = await tx.lobby.create({
-      data: {
-        name: input.name,
-        visibility: input.visibility,
-        smallBlind: input.smallBlind,
-        bigBlind: input.bigBlind,
-        minBuyIn: input.minBuyIn,
-        maxBuyIn: input.maxBuyIn,
-        maxPlayers: input.maxPlayers,
-        passwordHash,
-        createdByUserId: user.id,
-      },
-    });
-
-    await tx.lobbyPlayer.create({
-      data: {
-        lobbyId: createdLobby.id,
-        userId: user.id,
-        seatNumber: 1,
-        chipStack: input.minBuyIn,
-        status: "JOINED",
-      },
-    });
-
-    return createdLobby;
+  const invite = await prisma.lobby.findUnique({
+    where: { id: lobbyId },
+    select: { inviteCode: true },
   });
 
-  return getWaitingRoomLobbyForUser(lobby.id, user.id);
+  return { ...lobby, inviteCode: invite?.inviteCode ?? null };
 }
 
-export async function joinLobbyForUser(
-  user: AuthenticatedUser,
-  rawInput: unknown,
-) {
+function isUniqueViolation(error: unknown) {
+  return isRecord(error) && error.code === "P2002";
+}
+
+export async function createLobbyForUser(user: AuthenticatedUser, rawInput: unknown) {
+  const input = validateCreateGameInput(rawInput);
+  const { settings } = input;
+  const openHostedTables = await prisma.lobby.count({
+    where: { createdByUserId: user.id, status: { in: ["WAITING", "ACTIVE"] } },
+  });
+
+  if (openHostedTables >= MAX_OPEN_TABLES_PER_HOST) {
+    throw new LobbyServiceError(
+      "TOO_MANY_TABLES",
+      `You can host up to ${MAX_OPEN_TABLES_PER_HOST} open tables at once. Close one to create another.`,
+    );
+  }
+  const passwordHash = input.password ? await hashPassword(input.password) : null;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const lobby = await prisma.$transaction(async (tx) => {
+        const createdLobby = await tx.lobby.create({
+          data: {
+            name: input.name,
+            visibility: input.visibility,
+            // Legacy columns mirror settings for older readers.
+            smallBlind: settings.smallBlind,
+            bigBlind: settings.bigBlind,
+            minBuyIn: settings.minBuyIn,
+            maxBuyIn: settings.maxBuyIn,
+            maxPlayers: settings.maxPlayers,
+            settings: settings as unknown as Prisma.InputJsonObject,
+            passwordHash,
+            inviteCode: generateInviteCode(),
+            createdByUserId: user.id,
+          },
+        });
+
+        await tx.lobbyPlayer.create({
+          data: {
+            lobbyId: createdLobby.id,
+            userId: user.id,
+            // Membership only: seats and chips come from the game server's buy-in (wallet ledger).
+            seatNumber: null,
+            chipStack: null,
+            status: "JOINED",
+          },
+        });
+
+        return createdLobby;
+      });
+
+      return getWaitingRoomLobbyForUser(lobby.id, user.id);
+    } catch (error) {
+      // Invite code collision (~2^-59 per pair); retry with a fresh code.
+      if (isUniqueViolation(error) && attempt < 3) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+}
+
+export async function joinLobbyForUser(user: AuthenticatedUser, rawInput: unknown) {
   const input = validateJoinInput(rawInput);
 
   const lobby = await prisma.lobby.findUnique({
-    where: { id: input.lobbyId },
+    where: input.inviteCode ? { inviteCode: input.inviteCode } : { id: input.lobbyId },
   });
 
-  if (!lobby) {
-    throw new LobbyServiceError("LOBBY_NOT_FOUND", "Lobby was not found.");
+  if (!lobby || (input.inviteCode && input.lobbyId && lobby.id !== input.lobbyId)) {
+    throw new LobbyServiceError("LOBBY_NOT_FOUND", "That table doesn't exist or has closed.");
   }
 
-  if (lobby.status !== "WAITING") {
-    throw new LobbyServiceError(
-      "LOBBY_CLOSED",
-      "Only waiting lobbies can be joined.",
-    );
+  const existingMembership = await prisma.lobbyPlayer.findUnique({
+    where: { lobbyId_userId: { lobbyId: lobby.id, userId: user.id } },
+    select: { status: true },
+  });
+  const isActiveMember =
+    existingMembership !== null && (ACTIVE_PLAYER_STATUSES as readonly string[]).includes(existingMembership.status);
+
+  // Players already at the table just go back to it.
+  if (isActiveMember && lobby.status !== "CLOSED") {
+    return getWaitingRoomLobbyForUser(lobby.id, user.id);
   }
 
-  if (lobby.visibility === "PRIVATE") {
+  if (lobby.status === "CLOSED") {
+    throw new LobbyServiceError("LOBBY_CLOSED", "This table has closed.");
+  }
+
+  // Private tables with an invite code are reachable only through the invite link.
+  // Legacy private tables (no code) stay reachable by ID + password.
+  if (lobby.visibility === "PRIVATE" && lobby.inviteCode && input.inviteCode !== lobby.inviteCode) {
+    throw new LobbyServiceError("LOBBY_NOT_FOUND", "That table doesn't exist or has closed.");
+  }
+
+  if (lobby.visibility === "PRIVATE" && !lobby.inviteCode && !lobby.passwordHash) {
+    throw new LobbyServiceError("LOBBY_NOT_FOUND", "That table doesn't exist or has closed.");
+  }
+
+  if (lobby.passwordHash) {
     const password = input.password ?? "";
+    const rateKey = `lobbyPassword:acct:${user.id}`;
+    const limit = await checkRateLimit(rateKey);
 
-    if (!lobby.passwordHash || !(await verifyPassword(password, lobby.passwordHash))) {
+    if (!limit.allowed) {
+      throw new LobbyServiceError(
+        "RATE_LIMITED",
+        `Too many wrong passwords. Try again in ${formatRetryAfter(limit.retryAfterSeconds)}.`,
+      );
+    }
+
+    if (!(await verifyPassword(password, lobby.passwordHash))) {
+      if (password) {
+        await recordRateLimitAttempt(rateKey, TABLE_PASSWORD_RATE_LIMIT);
+      }
+
       throw new LobbyServiceError(
         "INVALID_LOBBY_PASSWORD",
-        "Private lobby password is incorrect.",
+        password ? "That password is incorrect." : "This table needs a password.",
       );
     }
   }
 
   await prisma.$transaction(async (tx) => {
-    const activePlayers = await tx.lobbyPlayer.findMany({
-      where: {
-        lobbyId: lobby.id,
-        status: {
-          in: [...ACTIVE_PLAYER_STATUSES],
-        },
-      },
-      select: {
-        userId: true,
-        seatNumber: true,
-      },
-    });
-
     const existingPlayer = await tx.lobbyPlayer.findUnique({
       where: {
         lobbyId_userId: {
@@ -367,25 +500,10 @@ export async function joinLobbyForUser(
     });
 
     if (existingPlayer?.status === "KICKED") {
-      throw new LobbyServiceError(
-        "PLAYER_REMOVED",
-        "This account cannot rejoin the lobby.",
-      );
+      throw new LobbyServiceError("PLAYER_REMOVED", "You can't rejoin this table.");
     }
 
-    const isAlreadyActive = activePlayers.some(
-      (player) => player.userId === user.id,
-    );
-    const seatNumber =
-      existingPlayer?.seatNumber ??
-      findOpenSeat(
-        lobby.maxPlayers,
-        activePlayers.map((player) => player.seatNumber),
-      );
-
-    if (!isAlreadyActive && activePlayers.length >= lobby.maxPlayers) {
-      throw new LobbyServiceError("LOBBY_FULL", "Lobby is full.");
-    }
+    // Membership is not a seat: seats (and the table's player limit) are enforced by the game server.
 
     await tx.lobbyPlayer.upsert({
       where: {
@@ -397,13 +515,14 @@ export async function joinLobbyForUser(
       create: {
         lobbyId: lobby.id,
         userId: user.id,
-        seatNumber,
-        chipStack: lobby.minBuyIn,
+        // Membership only: chips exist only after a wallet buy-in through the game server.
+        seatNumber: null,
+        chipStack: null,
         status: "JOINED",
       },
       update: {
-        seatNumber,
-        chipStack: existingPlayer?.chipStack ?? lobby.minBuyIn,
+        seatNumber: null,
+        chipStack: null,
         status: "JOINED",
         leftAt: null,
       },
