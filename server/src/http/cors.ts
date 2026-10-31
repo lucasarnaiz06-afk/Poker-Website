@@ -44,3 +44,12 @@ export const corsOptions: CorsOptions = {
   },
   credentials: true,
 };
+
+/** Socket handshakes: browsers always send Origin; only non-browser dev tools may omit it. */
+export function isSocketOriginAllowed(origin?: string) {
+  if (!origin) {
+    return env.nodeEnv !== "production";
+  }
+
+  return isCorsOriginAllowed(origin);
+}

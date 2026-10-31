@@ -1,419 +1,265 @@
-import type { Server as HttpServer } from "node:http";
-import type { AuthenticatedSession } from "@poker-platform/shared/auth";
-import {
-  getLobbySummary,
-  getWaitingRoomLobbyForUser,
-  LobbyServiceError,
-  markLobbyActive,
-  persistCompletedHand,
-} from "@poker-platform/shared/lobbies";
+// Socket.io layer: handshake checks (Origin allowlist, session cookie), payload validation, per-socket
+// rate limits and ack-based commands that forward to the TableRuntime. No game logic lives here.
+import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type {
-  LobbyPresencePayload,
-  LobbySummary,
-  PublicChatMessagePayload,
-  PublicHandCompletePayload,
+  Ack,
+  ClientToServerEvents,
+  LobbyTableSummary,
+  ServerToClientEvents,
 } from "@poker-platform/shared/types";
 import { Server, type Socket } from "socket.io";
-import { isCorsOriginAllowed } from "../http/cors";
-import { authenticateCookieHeader } from "../security/session";
-import {
-  TableRuntime,
-  type PlayerActionInput,
-  type PublicTableState,
-} from "../table-runtime";
+import { ZodError } from "zod";
+import { RuntimeError } from "../table-runtime/errors";
+import type { TableTransport } from "../table-runtime/ports";
+import { TableRuntime, type RuntimeDeps } from "../table-runtime/runtime";
+import { DEFAULT_SOCKET_LIMITS, SlidingWindowLimiter, type RateLimitCategory, type WindowPolicy } from "./rate-limit";
+import { schemas, type PayloadOf, type SocketEventName } from "./schemas";
 
-type ClientToServerEvents = {
-  join_lobby: (payload: { lobbyId?: string }) => void;
-  leave_lobby: (payload: { lobbyId?: string }) => void;
-  start_game: (payload: { lobbyId?: string }) => void;
-  player_action: (payload: ({ lobbyId?: string } & PlayerActionInput)) => void;
-  send_chat_message: (payload: {
-    lobbyId?: string;
-    message?: string;
-    emoteId?: string;
-  }) => void;
+export type SocketAuth = { userId: string };
+
+type SocketData = { userId: string };
+type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
+type LooseSocket = { on(event: string, listener: (...args: unknown[]) => void): void };
+type GameServer = Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
+
+export type RealtimeOptions = {
+  httpServer: HttpServer;
+  runtimeDeps: Omit<RuntimeDeps, "transport">;
+  /** Resolves the user from the handshake (session cookie in production). null = reject. */
+  authenticate: (request: IncomingMessage) => Promise<SocketAuth | null>;
+  isOriginAllowed: (origin: string | undefined) => boolean;
+  limits?: Partial<Record<RateLimitCategory, WindowPolicy>>;
+  maxPayloadBytes?: number;
+  logger?: (message: string, error?: unknown) => void;
 };
 
-type ServerToClientEvents = {
-  presence_update: (payload: LobbyPresencePayload) => void;
-  lobby_error: (payload: { message: string }) => void;
-  table_error: (payload: { message: string; code: string }) => void;
-  game_state_update: (payload: PublicTableState) => void;
-  hand_complete: (payload: PublicHandCompletePayload) => void;
-  receive_chat_message: (payload: PublicChatMessagePayload) => void;
+const CATEGORY: Record<SocketEventName, RateLimitCategory> = {
+  "table:join": "join",
+  "table:leave": "join",
+  "table:sit": "seat",
+  "table:stand": "seat",
+  "table:sitOut": "seat",
+  "table:rebuy": "seat",
+  "table:start": "seat",
+  "table:close": "seat",
+  "table:straddle": "seat",
+  "table:show": "seat",
+  "table:action": "action",
+  "table:propose": "vote",
+  "table:vote": "vote",
+  "table:chat": "chat",
+  "lobby:subscribe": "lobby",
+  "lobby:unsubscribe": "lobby",
 };
 
-type InterServerEvents = Record<string, never>;
+/** Chat is limited per user (all their sockets); everything else per socket. */
+const PER_USER: ReadonlySet<RateLimitCategory> = new Set(["chat"]);
 
-type SocketData = {
-  session: AuthenticatedSession;
-  lobbyIds: Set<string>;
-};
-
-type LobbySocket = Socket<
-  ClientToServerEvents,
-  ServerToClientEvents,
-  InterServerEvents,
-  SocketData
->;
-
-type LobbyServer = Server<
-  ClientToServerEvents,
-  ServerToClientEvents,
-  InterServerEvents,
-  SocketData
->;
-
-const presenceByLobby = new Map<string, Map<string, number>>();
-const CHAT_MESSAGE_MAX_LENGTH = 180;
-const EMOTE_ID_PATTERN = /^(?:[1-9]|[1-4][0-9]|5[0-2])$/;
-
-function getRoomName(lobbyId: string) {
-  return `lobby:${lobbyId}`;
+function userRoom(userId: string) {
+  return `user:${userId}`;
 }
+const LOBBY_ROOM = "lobby";
 
-function readLobbyId(payload?: { lobbyId?: string } | null) {
-  return typeof payload?.lobbyId === "string" ? payload.lobbyId.trim() : "";
-}
-
-function readChatMessage(payload?: { message?: string } | null) {
-  const message = typeof payload?.message === "string" ? payload.message.trim() : "";
-
-  return message.slice(0, CHAT_MESSAGE_MAX_LENGTH);
-}
-
-function readEmoteId(payload?: { emoteId?: string } | null) {
-  const emoteId = typeof payload?.emoteId === "string" ? payload.emoteId.trim() : "";
-
-  return EMOTE_ID_PATTERN.test(emoteId) ? emoteId : "";
-}
-
-function addPresence(lobbyId: string, userId: string) {
-  const lobbyPresence = presenceByLobby.get(lobbyId) ?? new Map<string, number>();
-  const currentCount = lobbyPresence.get(userId) ?? 0;
-
-  lobbyPresence.set(userId, currentCount + 1);
-  presenceByLobby.set(lobbyId, lobbyPresence);
-}
-
-function removePresence(lobbyId: string, userId: string) {
-  const lobbyPresence = presenceByLobby.get(lobbyId);
-
-  if (!lobbyPresence) {
-    return;
-  }
-
-  const nextCount = (lobbyPresence.get(userId) ?? 1) - 1;
-
-  if (nextCount > 0) {
-    lobbyPresence.set(userId, nextCount);
-    return;
-  }
-
-  lobbyPresence.delete(userId);
-
-  if (lobbyPresence.size === 0) {
-    presenceByLobby.delete(lobbyId);
-  }
-}
-
-function getOnlineUserIds(lobbyId: string) {
-  return [...(presenceByLobby.get(lobbyId)?.keys() ?? [])];
-}
-
-async function emitPresenceUpdate(io: LobbyServer, lobbyId: string) {
-  const lobby = await getLobbySummary(lobbyId);
-
-  if (!lobby) {
-    return;
-  }
-
-  const playerUserIds = new Set(lobby.players.map((player) => player.userId));
-  const onlineUserIds = getOnlineUserIds(lobbyId).filter((userId) =>
-    playerUserIds.has(userId),
-  );
-
-  io.to(getRoomName(lobbyId)).emit("presence_update", {
-    lobby,
-    onlineUserIds,
-    updatedAt: new Date().toISOString(),
-  });
-}
-
-async function joinLobbyRoom(
-  io: LobbyServer,
-  socket: LobbySocket,
-  lobbyId: string,
-) {
-  const lobby = await getWaitingRoomLobbyForUser(
-    lobbyId,
-    socket.data.session.user.id,
-  );
-
-  if (!socket.data.lobbyIds.has(lobbyId)) {
-    socket.data.lobbyIds.add(lobbyId);
-    addPresence(lobbyId, socket.data.session.user.id);
-    socket.join(getRoomName(lobbyId));
-  }
-
-  await emitPresenceUpdate(io, lobbyId);
-
-  return lobby;
-}
-
-async function getLobbyForSocket(
-  io: LobbyServer,
-  socket: LobbySocket,
-  lobbyId: string,
-) {
-  if (!socket.data.lobbyIds.has(lobbyId)) {
-    return joinLobbyRoom(io, socket, lobbyId);
-  }
-
-  return getWaitingRoomLobbyForUser(lobbyId, socket.data.session.user.id);
-}
-
-function getPlayerDisplayName(lobby: LobbySummary, playerId: string) {
-  const lobbyPlayer = lobby.players.find((player) => player.userId === playerId);
-
-  return lobbyPlayer?.name ?? lobbyPlayer?.email ?? "Player";
-}
-
-function buildChatPayload({
-  emoteId,
-  lobby,
-  lobbyId,
-  message,
-  playerId,
-}: {
-  emoteId: string;
-  lobby: LobbySummary;
-  lobbyId: string;
-  message: string;
-  playerId: string;
-}): PublicChatMessagePayload {
-  const sentAt = new Date();
-
-  return {
-    id: `${sentAt.getTime()}:${playerId}:${Math.random().toString(36).slice(2)}`,
-    lobbyId,
-    playerId,
-    playerName: getPlayerDisplayName(lobby, playerId),
-    message: message || null,
-    emoteId: emoteId || null,
-    emoteSrc: emoteId ? `/emotes/${emoteId}.png` : null,
-    sentAt: sentAt.toISOString(),
-  };
-}
-
-function leaveLobby(socket: LobbySocket, lobbyId: string) {
-  if (!socket.data.lobbyIds.has(lobbyId)) {
-    return false;
-  }
-
-  socket.leave(getRoomName(lobbyId));
-  socket.data.lobbyIds.delete(lobbyId);
-  removePresence(lobbyId, socket.data.session.user.id);
-
-  return true;
-}
-
-function logPresenceError(error: unknown) {
-  console.error("Realtime presence update failed", error);
-}
-
-export function createSocketServer(httpServer: HttpServer) {
-  const io: LobbyServer = new Server(httpServer, {
+export function createRealtime(options: RealtimeOptions) {
+  const limits = { ...DEFAULT_SOCKET_LIMITS, ...options.limits };
+  const logError = options.logger ?? ((message: string, error?: unknown) => console.error(`[realtime] ${message}`, error ?? ""));
+  const io: GameServer = new Server(options.httpServer, {
+    maxHttpBufferSize: options.maxPayloadBytes ?? 16_384,
+    serveClient: false,
+    pingInterval: 20_000,
+    pingTimeout: 20_000,
     cors: {
       origin(origin, callback) {
-        callback(null, isCorsOriginAllowed(origin));
+        callback(null, options.isOriginAllowed(origin));
       },
       allowedHeaders: ["content-type", "ngrok-skip-browser-warning"],
       credentials: true,
     },
-  });
-  const tableRuntime = new TableRuntime({
-    loadLobby: getLobbySummary,
-    activateLobby: markLobbyActive,
-    persistCompletedHand,
-    onLobbyUpdated(lobbyId) {
-      return emitPresenceUpdate(io, lobbyId);
+    allowRequest(request, callback) {
+      callback(null, options.isOriginAllowed(request.headers.origin));
     },
-    async getRecipients(lobbyId) {
-      const roomSockets = await io.in(getRoomName(lobbyId)).fetchSockets();
+  });
 
-      return roomSockets.map((roomSocket) => ({
-        socketId: roomSocket.id,
-        userId: roomSocket.data.session.user.id,
-        emitGameState(payload) {
-          roomSocket.emit("game_state_update", payload);
-        },
-        emitHandComplete(payload) {
-          roomSocket.emit("hand_complete", payload);
-        },
-      }));
+  const transport: TableTransport = {
+    sendState(connId, view) {
+      io.sockets.sockets.get(connId)?.emit("table:state", view);
     },
-  });
+    sendChat(connIds, message) {
+      if (connIds.length > 0) io.to(connIds).emit("table:chat", message);
+    },
+    sendError(connId, error) {
+      io.sockets.sockets.get(connId)?.emit("table:error", error);
+    },
+    sendBalance(userId, balance) {
+      io.to(userRoom(userId)).emit("wallet:balance", { balance });
+    },
+  };
+  const runtime = new TableRuntime({ ...options.runtimeDeps, transport });
+  const limiter = new SlidingWindowLimiter(() => options.runtimeDeps.clock.now());
+
+  let lobbySubscribers = 0;
+  let unsubscribeLobby: (() => void) | null = null;
+  const lobbyListener = (tables: LobbyTableSummary[]) => io.to(LOBBY_ROOM).emit("lobby:tables", tables);
 
   io.use(async (socket, next) => {
     try {
-      const session = await authenticateCookieHeader(socket.handshake.headers.cookie);
-
-      if (!session) {
+      const auth = await options.authenticate(socket.request);
+      if (!auth) {
         next(new Error("Unauthorized"));
         return;
       }
-
-      socket.data.session = session;
-      socket.data.lobbyIds = new Set<string>();
+      socket.data.userId = auth.userId;
       next();
     } catch (error) {
-      next(error instanceof Error ? error : new Error("Unauthorized"));
+      logError("socket auth failed", error);
+      next(new Error("Unauthorized"));
     }
   });
 
-  io.on("connection", (socket) => {
-    socket.on("join_lobby", async (payload) => {
-      const lobbyId = readLobbyId(payload);
+  io.on("connection", (rawSocket) => {
+    const socket = rawSocket as GameSocket;
+    const userId = socket.data.userId;
+    let inLobby = false;
+    void socket.join(userRoom(userId));
 
-      if (!lobbyId) {
-        socket.emit("lobby_error", { message: "Lobby ID is required." });
-        return;
-      }
-
-      try {
-        await joinLobbyRoom(io, socket, lobbyId);
-
-        if (tableRuntime.hasActiveTable(lobbyId)) {
-          await tableRuntime.emitTableStateToRecipient(lobbyId, {
-            socketId: socket.id,
-            userId: socket.data.session.user.id,
-            emitGameState(payload) {
-              socket.emit("game_state_update", payload);
-            },
-            emitHandComplete(payload) {
-              socket.emit("hand_complete", payload);
-            },
-          });
+    function handle<E extends SocketEventName, T>(
+      event: E,
+      handler: (payload: PayloadOf<E>) => Promise<T>,
+    ) {
+      (socket as unknown as LooseSocket).on(event, async (...args: unknown[]) => {
+        const ack = typeof args[args.length - 1] === "function" ? (args.pop() as (r: Ack<T>) => void) : null;
+        const reply = (result: Ack<T>) => {
+          if (ack) ack(result);
+        };
+        if (!ack) return; // every command is ack-based
+        const category = CATEGORY[event];
+        const limitKey = PER_USER.has(category) ? `u:${userId}:${category}` : `s:${socket.id}:${category}`;
+        if (!limiter.take(`s:${socket.id}:any`, limits.any) || !limiter.take(limitKey, limits[category])) {
+          reply({ ok: false, code: "RATE_LIMITED", message: "Slow down a little." });
+          return;
         }
-      } catch (error) {
-        const message =
-          error instanceof LobbyServiceError
-            ? error.message
-            : "Realtime lobby connection failed.";
+        const parsed = schemas[event].safeParse(args[0]);
+        if (!parsed.success) {
+          reply({ ok: false, code: "INVALID_PAYLOAD", message: parsed.error.issues[0]?.message ?? "Invalid request." });
+          return;
+        }
+        try {
+          const data = await handler(parsed.data as PayloadOf<E>);
+          reply({ ok: true, data });
+        } catch (error) {
+          if (error instanceof RuntimeError) {
+            reply({ ok: false, code: error.code, message: error.message });
+          } else if (error instanceof ZodError) {
+            reply({ ok: false, code: "INVALID_PAYLOAD", message: "Invalid request." });
+          } else {
+            logError(`${event} failed`, error);
+            reply({ ok: false, code: "INTERNAL_ERROR", message: "Something went wrong. Please try again." });
+          }
+        }
+      });
+    }
 
-        socket.emit("lobby_error", { message });
-      }
+    /** Table commands need a prior table:join from this socket. */
+    function requireJoined(tableId: string) {
+      if (!runtime.isViewing(socket.id, tableId)) throw new RuntimeError("NOT_JOINED", "Join the table first.");
+    }
+
+    handle("table:join", (p) => runtime.join(socket.id, userId, p.tableId, { password: p.password, inviteCode: p.inviteCode }));
+    handle("table:leave", async (p) => {
+      await runtime.leave(socket.id, p.tableId);
+      return undefined;
     });
-
-    socket.on("leave_lobby", (payload) => {
-      const lobbyId = readLobbyId(payload);
-
-      if (!lobbyId || !leaveLobby(socket, lobbyId)) {
-        return;
-      }
-
-      void emitPresenceUpdate(io, lobbyId).catch(logPresenceError);
+    handle("table:sit", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.sit(userId, p.tableId, p.seat, p.buyIn, p.postNow);
+      return undefined;
     });
-
-    socket.on("start_game", async (payload) => {
-      const lobbyId = readLobbyId(payload);
-
-      if (!lobbyId) {
-        socket.emit("table_error", {
-          code: "INVALID_LOBBY_ID",
-          message: "Lobby ID is required.",
-        });
-        return;
-      }
-
-      try {
-        await joinLobbyRoom(io, socket, lobbyId);
-        await tableRuntime.startGame(lobbyId, socket.data.session.user.id);
-      } catch (error) {
-        const payload =
-          error instanceof LobbyServiceError
-            ? { code: error.code, message: error.message }
-            : tableRuntime.toErrorPayload(error);
-
-        socket.emit("table_error", payload);
-      }
+    handle("table:stand", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.stand(userId, p.tableId);
+      return undefined;
     });
-
-    socket.on("player_action", async (payload) => {
-      const lobbyId = readLobbyId(payload);
-
-      if (!lobbyId) {
-        socket.emit("table_error", {
-          code: "INVALID_LOBBY_ID",
-          message: "Lobby ID is required.",
-        });
-        return;
-      }
-
-      try {
-        await joinLobbyRoom(io, socket, lobbyId);
-        await tableRuntime.applyPlayerAction(
-          lobbyId,
-          socket.data.session.user.id,
-          payload,
-        );
-      } catch (error) {
-        const payload =
-          error instanceof LobbyServiceError
-            ? { code: error.code, message: error.message }
-            : tableRuntime.toErrorPayload(error);
-
-        socket.emit("table_error", payload);
-      }
+    handle("table:sitOut", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.sitOut(userId, p.tableId, p.sitOut);
+      return undefined;
     });
-
-    socket.on("send_chat_message", async (payload) => {
-      const lobbyId = readLobbyId(payload);
-
-      if (!lobbyId) {
-        socket.emit("lobby_error", { message: "Lobby ID is required." });
-        return;
+    handle("table:rebuy", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.rebuy(userId, p.tableId, p.amount);
+      return undefined;
+    });
+    handle("table:start", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.start(userId, p.tableId);
+      return undefined;
+    });
+    handle("table:close", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.close(userId, p.tableId);
+      return undefined;
+    });
+    handle("table:action", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.action(userId, p.tableId, p.handId, p.type, p.amount);
+      return undefined;
+    });
+    handle("table:straddle", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.straddle(userId, p.tableId, p.enabled);
+      return undefined;
+    });
+    handle("table:propose", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.propose(userId, p.tableId, p.kind, p.action);
+      return undefined;
+    });
+    handle("table:vote", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.vote(userId, p.tableId, p.voteId, p.yes);
+      return undefined;
+    });
+    handle("table:show", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.show(userId, p.tableId, p.handId);
+      return undefined;
+    });
+    handle("table:chat", async (p) => {
+      requireJoined(p.tableId);
+      await runtime.chat(userId, p.tableId, p.text, p.emoteId);
+      return undefined;
+    });
+    handle("lobby:subscribe", async () => {
+      if (!inLobby) {
+        inLobby = true;
+        await socket.join(LOBBY_ROOM);
+        lobbySubscribers += 1;
+        unsubscribeLobby ??= runtime.subscribeLobby(lobbyListener);
       }
-
-      const message = readChatMessage(payload);
-      const emoteId = readEmoteId(payload);
-
-      if (!message && !emoteId) {
-        socket.emit("lobby_error", { message: "Chat message is empty." });
-        return;
+      return runtime.lobbySummaries();
+    });
+    const leaveLobby = () => {
+      if (!inLobby) return;
+      inLobby = false;
+      void socket.leave(LOBBY_ROOM);
+      lobbySubscribers -= 1;
+      if (lobbySubscribers <= 0 && unsubscribeLobby) {
+        lobbySubscribers = 0;
+        unsubscribeLobby();
+        unsubscribeLobby = null;
       }
-
-      try {
-        const lobby = await getLobbyForSocket(io, socket, lobbyId);
-        const chatPayload = buildChatPayload({
-          emoteId,
-          lobby,
-          lobbyId,
-          message,
-          playerId: socket.data.session.user.id,
-        });
-
-        io.to(getRoomName(lobbyId)).emit("receive_chat_message", chatPayload);
-      } catch (error) {
-        const message =
-          error instanceof LobbyServiceError
-            ? error.message
-            : "Chat message failed.";
-
-        socket.emit("lobby_error", { message });
-      }
+    };
+    handle("lobby:unsubscribe", async () => {
+      leaveLobby();
+      return undefined;
     });
 
     socket.on("disconnect", () => {
-      const lobbyIds = [...socket.data.lobbyIds];
-
-      for (const lobbyId of lobbyIds) {
-        leaveLobby(socket, lobbyId);
-        void emitPresenceUpdate(io, lobbyId).catch(logPresenceError);
-      }
+      leaveLobby();
+      limiter.forget(`s:${socket.id}:`);
+      void runtime.disconnect(socket.id).catch((error) => logError("disconnect cleanup failed", error));
     });
   });
 
-  return io;
+  return { io, runtime };
 }

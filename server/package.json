@@ -5,25 +5,29 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "test:engine": "tsx src/poker-engine/poker-engine.test.ts",
-    "test:runtime": "tsx src/table-runtime/table-runtime.test.ts",
+    "start": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:runtime": "vitest run src/table-runtime",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@poker-platform/engine": "0.1.0",
     "@poker-platform/shared": "0.1.0",
     "@prisma/client": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.19.0",
-    "pokersolver": "^2.1.4",
-    "socket.io": "^4.8.3"
+    "helmet": "^8.3.0",
+    "socket.io": "^4.8.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.0",
     "@types/express": "^4.17.0",
     "@types/node": "^22.0.0",
+    "socket.io-client": "^4.8.4",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.5"
   }
 }
