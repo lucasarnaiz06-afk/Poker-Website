@@ -1,144 +1,93 @@
+import {
+  AUTH_RATE_LIMITS,
+  buildLinkEmail,
+  checkRateLimit,
+  isEmailDeliveryConfigured,
+  rateLimitKey,
+  recordRateLimitAttempt,
+  sendMail,
+} from "@poker-platform/shared/auth";
+import type { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
-import type { NextAuthOptions } from "next-auth";
+import { tryDevRequestOrigin } from "./request";
 
-type EmailServerConfig = {
-  host: string;
-  port?: number;
-  secure?: boolean;
-  auth?: {
-    user: string;
-    pass: string;
-  };
-};
+/**
+ * Development only: NextAuth builds magic links from NEXTAUTH_URL, which may be an offline tunnel. Point the
+ * link (and its callbackUrl) at the origin the request came in on instead. Production links are unchanged.
+ */
+export function devLinkForRequestOrigin(url: string, requestOrigin: string | null): string {
+  if (!requestOrigin) {
+    return url;
+  }
+
+  try {
+    const link = new URL(url);
+    const configuredOrigin = link.origin;
+    const rewritten = new URL(`${link.pathname}${link.search}${link.hash}`, requestOrigin);
+    const callback = rewritten.searchParams.get("callbackUrl");
+
+    if (callback?.startsWith(configuredOrigin)) {
+      rewritten.searchParams.set("callbackUrl", `${requestOrigin}${callback.slice(configuredOrigin.length)}`);
+    }
+
+    return rewritten.toString();
+  } catch {
+    return url;
+  }
+}
+
 
 export type EnabledAuthProviders = {
+  /** Magic link. Always available in development (links are printed to the console). */
   email: boolean;
   google: boolean;
+  password: true;
 };
-
-function readOptionalPort(rawPort?: string) {
-  if (!rawPort) {
-    return undefined;
-  }
-
-  const port = Number(rawPort);
-
-  return Number.isInteger(port) && port > 0 ? port : undefined;
-}
-
-function decodeCredential(rawCredential: string) {
-  try {
-    return decodeURIComponent(rawCredential);
-  } catch {
-    return rawCredential;
-  }
-}
-
-function createStructuredEmailServerConfig(): EmailServerConfig | null {
-  if (!process.env.EMAIL_SERVER_HOST) {
-    return null;
-  }
-
-  const user = process.env.EMAIL_SERVER_USER;
-  const pass = process.env.EMAIL_SERVER_PASSWORD;
-
-  return {
-    host: process.env.EMAIL_SERVER_HOST,
-    port: readOptionalPort(process.env.EMAIL_SERVER_PORT),
-    secure: process.env.EMAIL_SERVER_SECURE === "true",
-    auth: user && pass ? { user, pass } : undefined,
-  };
-}
-
-function createLenientEmailServerConfig(
-  rawServer: string,
-): string | EmailServerConfig {
-  let standardUrl: URL;
-
-  try {
-    standardUrl = new URL(rawServer);
-  } catch {
-    return rawServer;
-  }
-
-  const atSignCount = (rawServer.match(/@/g) ?? []).length;
-
-  if (standardUrl.password || atSignCount <= 1) {
-    return rawServer;
-  }
-
-  const serverMatch = rawServer.match(/^([a-z][a-z0-9+.-]*):\/\/(.+)$/i);
-
-  if (!serverMatch) {
-    return rawServer;
-  }
-
-  const [, protocol, rest] = serverMatch;
-  const authSeparatorIndex = rest.lastIndexOf("@");
-
-  if (authSeparatorIndex < 0) {
-    return rawServer;
-  }
-
-  const authPart = rest.slice(0, authSeparatorIndex);
-  const hostPart = rest.slice(authSeparatorIndex + 1);
-  const passwordSeparatorIndex = authPart.indexOf(":");
-
-  if (passwordSeparatorIndex < 0) {
-    return rawServer;
-  }
-
-  const hostUrl = new URL(`${protocol}://${hostPart}`);
-  const user = decodeCredential(authPart.slice(0, passwordSeparatorIndex));
-  const pass = decodeCredential(authPart.slice(passwordSeparatorIndex + 1));
-
-  return {
-    host: hostUrl.hostname,
-    port: readOptionalPort(hostUrl.port),
-    secure: protocol.toLowerCase() === "smtps",
-    auth: { user, pass },
-  };
-}
-
-function createEmailServerConfig() {
-  const structuredServer = createStructuredEmailServerConfig();
-
-  if (structuredServer) {
-    return structuredServer;
-  }
-
-  if (!process.env.EMAIL_SERVER) {
-    return undefined;
-  }
-
-  return createLenientEmailServerConfig(process.env.EMAIL_SERVER);
-}
 
 export function getEnabledAuthProviders(): EnabledAuthProviders {
   return {
-    email: Boolean(
-      process.env.EMAIL_FROM &&
-        (process.env.EMAIL_SERVER || process.env.EMAIL_SERVER_HOST),
-    ),
+    email: isEmailDeliveryConfigured(),
     google: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+    password: true,
   };
 }
 
 export function createAuthProviders(): NextAuthOptions["providers"] {
-  const enabledProviders = getEnabledAuthProviders();
+  const enabled = getEnabledAuthProviders();
   const providers: NextAuthOptions["providers"] = [];
 
-  if (enabledProviders.email) {
+  if (enabled.email) {
     providers.push(
       EmailProvider({
-        server: createEmailServerConfig(),
-        from: process.env.EMAIL_FROM,
+        // Delivery goes through our mailer (console in dev, SMTP in production); `server` is unused.
+        server: {},
+        from: process.env.EMAIL_FROM ?? "Poker Platform <noreply@localhost>",
+        maxAge: 30 * 60,
+        async sendVerificationRequest({ identifier, url }) {
+          // Stop email bombing: a few links per address per hour (NextAuth reports a generic EmailSignin error).
+          const key = rateLimitKey("emailSend", "acct", `magic:${identifier}`);
+
+          if (!(await checkRateLimit(key)).allowed) {
+            throw new Error("Too many sign-in emails requested for this address.");
+          }
+
+          await recordRateLimitAttempt(key, AUTH_RATE_LIMITS.emailSend);
+          await sendMail(
+            buildLinkEmail({
+              to: identifier,
+              subject: "Your sign-in link",
+              intro: "Click the button to sign in to Poker Platform. The link expires in 30 minutes and works once.",
+              actionLabel: "Sign in",
+              url: devLinkForRequestOrigin(url, tryDevRequestOrigin()),
+            }),
+          );
+        },
       }),
     );
   }
 
-  if (enabledProviders.google) {
+  if (enabled.google) {
     providers.push(
       GoogleProvider({
         clientId: process.env.GOOGLE_CLIENT_ID ?? "",

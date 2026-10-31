@@ -1,40 +1,31 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+import { Alert, Button } from "@/components/ui";
+import { AuthCard } from "../_components/auth-card";
 
-type AuthErrorPageProps = {
-  searchParams?: {
-    error?: string | string[];
-  };
+export const metadata: Metadata = { title: "Sign-in problem" };
+
+const MESSAGES: Record<string, string> = {
+  AccessDenied: "This account can't sign in here.",
+  Verification: "The sign-in link is invalid, expired, or was already used.",
+  OAuthAccountNotLinked:
+    "An account with this email already exists. Sign in with your original method (password or email link) first.",
+  EmailSignin: "We couldn't send the sign-in email. Try again in a few minutes.",
+  Configuration: "Sign-in is misconfigured on the server.",
 };
 
-function getErrorMessage(error?: string | string[]) {
-  const errorCode = Array.isArray(error) ? error[0] : error;
+export default function AuthErrorPage({ searchParams }: { searchParams?: { error?: string | string[] } }) {
+  const code = Array.isArray(searchParams?.error) ? searchParams?.error[0] : searchParams?.error;
+  const message = (code && MESSAGES[code]) || "Sign-in could not be completed.";
 
-  if (errorCode === "AccessDenied") {
-    return "That account is not allowed for this workspace.";
-  }
-
-  if (errorCode === "Verification") {
-    return "The sign-in link is invalid or has expired.";
-  }
-
-  return "Authentication could not be completed.";
-}
-
-export default function AuthErrorPage({ searchParams }: AuthErrorPageProps) {
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-10">
-      <section className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-6 shadow-panel">
-        <h1 className="text-2xl font-semibold text-zinc-950">Sign-in blocked</h1>
-        <p className="mt-3 text-sm leading-6 text-zinc-600">
-          {getErrorMessage(searchParams?.error)}
-        </p>
-        <Link
-          href="/auth/signin"
-          className="mt-6 inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white transition hover:bg-zinc-800"
-        >
-          Back to sign in
-        </Link>
-      </section>
-    </main>
+    <AuthCard title="Couldn't sign you in">
+      <div className="space-y-4">
+        <Alert tone="danger">{message}</Alert>
+        <Button asChild fullWidth variant="secondary">
+          <Link href="/auth/signin">Back to sign in</Link>
+        </Button>
+      </div>
+    </AuthCard>
   );
 }

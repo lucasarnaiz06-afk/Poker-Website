@@ -16,11 +16,49 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts       Account[]
-  sessions       Session[]
-  wallets        Wallet[]
-  createdLobbies Lobby[]       @relation("LobbyCreator")
-  lobbySeats     LobbyPlayer[]
+  /// Public handle. Stored lowercase, 3-20 chars [a-z0-9_]. Null until onboarding.
+  username          String?    @unique
+  displayName       String?
+  /// Preset avatar id (see packages/shared/src/accounts/avatars.ts). No uploads.
+  avatar            String?
+  bio               String?
+  role              UserRole   @default(USER)
+  status            UserStatus @default(ACTIVE)
+  /// Play-money wallet. Only changed through packages/shared/src/wallet (ledger). CHECK >= 0 in SQL.
+  chipBalance       Int        @default(0)
+  /// argon2id PHC string. Null for magic-link / OAuth only accounts.
+  passwordHash      String?
+  passwordChangedAt DateTime?
+  /// AES-256-GCM encrypted base32 TOTP secret (key: AUTH_ENCRYPTION_KEY).
+  totpSecret        String?
+  totpEnabled       Boolean    @default(false)
+  /// Last accepted TOTP time step (replay protection).
+  totpLastCounter   Int?
+  preferences       Json       @default("{}")
+  lastSeenAt        DateTime?
+  usernameChangedAt DateTime?
+  deletedAt         DateTime?
+
+  accounts            Account[]
+  sessions            Session[]
+  wallets             Wallet[]
+  createdLobbies      Lobby[]                  @relation("LobbyCreator")
+  lobbySeats          LobbyPlayer[]
+  recoveryCodes       RecoveryCode[]
+  ledgerEntries       LedgerEntry[]
+  dailyBonusClaims    DailyBonusClaim[]
+  auditLogs           AuditLog[]
+  passwordResetTokens PasswordResetToken[]
+  emailVerifyTokens   EmailVerificationToken[]
+  responsibleGaming   ResponsibleGamingLimits?
+  handPlayers         HandPlayer[]
+  dailyStats          PlayerDailyStat[]
+  opponentStats       PlayerOpponentDaily[]    @relation("OpponentStatOwner")
+  opponentStatsAbout  PlayerOpponentDaily[]    @relation("OpponentStatSubject")
+  notesWritten        PlayerNote[]             @relation("NoteOwner")
+  notesAbout          PlayerNote[]             @relation("NoteSubject")
+
+  @@index([status])
 }
 
 model Account {
@@ -48,6 +86,10 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+  createdAt    DateTime @default(now())
+  /// Set for sessions created by password login / email verification (not by NextAuth providers).
+  userAgent    String?
+  ipHash       String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -86,7 +128,9 @@ model Lobby {
   minBuyIn        Int
   maxBuyIn        Int
   maxPlayers      Int             @default(9)
+  settings        Json            @default("{}")
   passwordHash    String?
+  inviteCode      String?         @unique
   createdByUserId String
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
@@ -94,6 +138,7 @@ model Lobby {
   createdBy User          @relation("LobbyCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
   players   LobbyPlayer[]
   hands     HandHistory[]
+  handLogs  Hand[]
 
   @@index([status, visibility])
   @@index([createdByUserId])
@@ -104,7 +149,7 @@ model LobbyPlayer {
   lobbyId    String
   userId     String
   seatNumber Int?
-  chipStack Int?
+  chipStack  Int?
   status     LobbyPlayerStatus @default(JOINED)
   joinedAt   DateTime          @default(now())
   leftAt     DateTime?
@@ -117,6 +162,7 @@ model LobbyPlayer {
   @@index([userId])
 }
 
+/// Legacy summary written by the current runtime. Superseded by Hand/HandPlayer.
 model HandHistory {
   id                     String   @id @default(cuid())
   lobbyId                String
@@ -152,4 +198,304 @@ enum LobbyPlayerStatus {
   SEATED
   LEFT
   KICKED
+}
+
+enum UserRole {
+  USER
+  MOD
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum LedgerEntryType {
+  SIGNUP_BONUS
+  DAILY_BONUS
+  REFILL
+  BUY_IN
+  CASH_OUT
+  REBUY
+  ADJUSTMENT
+  REFUND
+}
+
+// ---------------------------------------------------------------------------
+// Accounts / security
+// ---------------------------------------------------------------------------
+
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  /// HMAC-SHA256 of the normalized code.
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, codeHash])
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  /// SHA-256 of the raw token (raw token only ever lives in the emailed link).
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  email     String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Fixed-window counters with exponential lockout for auth endpoints. key = "<scope>:<ip|acct>:<hash>".
+model AuthRateLimit {
+  key         String    @id
+  count       Int       @default(0)
+  windowStart DateTime  @default(now())
+  lockedUntil DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([updatedAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  /// HMAC of the client IP (never the raw IP).
+  ipHash    String?
+  meta      Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+model ResponsibleGamingLimits {
+  userId                  String    @id
+  /// Max net loss per UTC day across all tables (chips). Null = no limit.
+  dailyLossLimit          Int?
+  /// Loosening a limit is delayed 24h; tightening is immediate.
+  pendingDailyLossLimit   Int?
+  pendingDailyLossLimitAt DateTime?
+  sessionReminderMinutes  Int?
+  coolOffUntil            DateTime?
+  selfExcludedUntil       DateTime?
+  selfExcludedPermanent   Boolean   @default(false)
+  updatedAt               DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// Wallet
+// ---------------------------------------------------------------------------
+
+model LedgerEntry {
+  id           String          @id @default(cuid())
+  userId       String
+  /// Signed chip change applied to User.chipBalance.
+  delta        Int
+  balanceAfter Int
+  type         LedgerEntryType
+  lobbyId      String?
+  /// Idempotency key; a second write with the same key is a no-op.
+  refKey       String          @unique
+  meta         Json            @default("{}")
+  createdAt    DateTime        @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([lobbyId])
+}
+
+model DailyBonusClaim {
+  id        String   @id @default(cuid())
+  userId    String
+  /// UTC calendar day, "YYYY-MM-DD".
+  day       String
+  streak    Int
+  amount    Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+}
+
+// ---------------------------------------------------------------------------
+// Hand history (written by the table runtime, read by history/stats)
+// ---------------------------------------------------------------------------
+
+model Hand {
+  id             String    @id @default(cuid())
+  lobbyId        String
+  handNumber     Int
+  /// e.g. "NLHE"
+  variant        String    @default("NLHE")
+  smallBlind     Int
+  bigBlind       Int
+  ante           Int       @default(0)
+  buttonSeat     Int
+  isBombPot      Boolean   @default(false)
+  runItTwice     Boolean   @default(false)
+  /// Array of boards (1, or 2 for double board / run it twice), each an array of card codes.
+  boards         Json
+  /// Pots with amounts, eligible user ids and awards per board.
+  pots           Json
+  /// Full engine event log (server-side; filter hidden cards before sending to clients).
+  events         Json
+  /// sha256(deck|salt) published at hand start.
+  deckCommitment String
+  /// { deck, salt } revealed after the hand.
+  deckReveal     Json?
+  totalPot       Int
+  startedAt      DateTime
+  endedAt        DateTime?
+
+  lobby   Lobby        @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  players HandPlayer[]
+
+  @@unique([lobbyId, handNumber])
+  @@index([endedAt])
+  @@index([lobbyId, endedAt])
+  @@index([handNumber])
+}
+
+model HandPlayer {
+  id             String   @id @default(cuid())
+  handId         String
+  userId         String
+  seat           Int
+  /// "BTN", "SB", "BB", "UTG", ...
+  position       String
+  startingStack  Int
+  endingStack    Int
+  /// endingStack - startingStack (includes side-game transfers).
+  net            Int
+  won            Int      @default(0)
+  /// Server-only. Never expose other players' cards unless shown = true.
+  holeCards      Json
+  shown          Boolean  @default(false)
+  sawFlop        Boolean  @default(false)
+  wentToShowdown Boolean  @default(false)
+  wonAtShowdown  Boolean  @default(false)
+  vpip           Boolean  @default(false)
+  pfr            Boolean  @default(false)
+  threeBet       Boolean  @default(false)
+  allInEvNet     Int?
+  createdAt      DateTime @default(now())
+
+  // Per-hand stat opportunities / hits derived from the event log (packages/shared/src/stats/event-stats.ts) when
+  // the hand is persisted, so /stats aggregates them in SQL. statsVersion = HAND_PLAYER_STATS_VERSION once filled
+  // (0 = not computed yet: run scripts/backfill-hand-stats.ts).
+  statsVersion     Int     @default(0)
+  /// Counted in the VPIP/PFR/limp denominator: acted preflop in a hand that was not a bomb pot.
+  preflopActed     Boolean @default(false)
+  limp             Boolean @default(false)
+  threeBetOpp      Boolean @default(false)
+  facedThreeBet    Boolean @default(false)
+  foldedToThreeBet Boolean @default(false)
+  cbetOpp          Boolean @default(false)
+  cbet             Boolean @default(false)
+  facedCbet        Boolean @default(false)
+  foldedToCbet     Boolean @default(false)
+  /// Postflop bets + raises (AF numerator).
+  postflopAggr     Int     @default(0)
+  postflopCalls    Int     @default(0)
+  /// Hold'em starting-hand class ("AKs", "T9o", "77"); null for PLO / unknown cards.
+  handClass        String?
+
+  hand Hand @relation(fields: [handId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([handId, userId])
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([userId, won])
+}
+
+model PlayerDailyStat {
+  userId        String
+  /// UTC calendar day, "YYYY-MM-DD".
+  day           String
+  hands         Int    @default(0)
+  net           Int    @default(0)
+  vpipHands     Int    @default(0)
+  pfrHands      Int    @default(0)
+  showdowns     Int    @default(0)
+  showdownsWon  Int    @default(0)
+  biggestPotWon Int    @default(0)
+  /// Sum over the day's hands of round(net * 100 / bigBlind) (HandPlayer net, side payments included): bb/100.
+  netCentiBB    Int    @default(0)
+  /// Bomb pots among `hands` (no preflop decisions: left out of the VPIP/PFR denominator).
+  bombPotHands  Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day])
+  @@index([day, net])
+}
+
+/// Money flow between two players per UTC day (both directions are stored: (a, b) and (b, a)). In each hand a
+/// player's result is split across the opponents on the other side of it in proportion to their own results;
+/// `flow` is the share won from (+) or lost to (-) `opponentId`. Maintained by persistCompletedHand /
+/// recordSidePayments; read by the "Opponents" section of /stats.
+model PlayerOpponentDaily {
+  userId     String
+  opponentId String
+  /// UTC calendar day, "YYYY-MM-DD".
+  day        String
+  /// Hands both were dealt into.
+  hands      Int    @default(0)
+  flow       Float  @default(0)
+  /// flow / bigBlind summed per hand.
+  flowBB     Float  @default(0)
+
+  user     User @relation("OpponentStatOwner", fields: [userId], references: [id], onDelete: Cascade)
+  opponent User @relation("OpponentStatSubject", fields: [opponentId], references: [id], onDelete: Cascade)
+
+  @@id([userId, day, opponentId])
+  @@index([opponentId])
+}
+
+model PlayerNote {
+  id        String   @id @default(cuid())
+  ownerId   String
+  subjectId String
+  text      String   @default("")
+  /// Colour tag id, e.g. "red" | "green" | "blue" | "yellow" | "purple" | "none".
+  color     String   @default("none")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User @relation("NoteOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  subject User @relation("NoteSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, subjectId])
+  @@index([subjectId])
 }

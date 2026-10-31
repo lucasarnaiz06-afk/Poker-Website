@@ -1,4 +1,8 @@
-export const DEFAULT_ALLOWED_EMAIL_DOMAINS = ["university.edu"] as const;
+/**
+ * Optional sign-up allow-list. ALLOWED_EMAIL_DOMAINS empty or unset = anyone can sign up.
+ * Entries are domains ("example.edu") or full addresses ("someone@example.com").
+ */
+export const DEFAULT_ALLOWED_EMAIL_DOMAINS = [] as const;
 
 export function parseAllowedEmailDomains(
   rawDomains?: string | readonly string[] | null,
@@ -46,6 +50,7 @@ export function getEmailDomain(email?: string | null): string | null {
   return email.slice(atIndex + 1).toLowerCase();
 }
 
+/** Returns true when `allowedDomains` is empty (open sign-up) or the email matches an entry. */
 export function isAllowedEmailDomain(
   email: string | null | undefined,
   allowedDomains: readonly string[],
@@ -55,6 +60,10 @@ export function isAllowedEmailDomain(
 
   if (!normalizedEmail || !emailDomain) {
     return false;
+  }
+
+  if (allowedDomains.length === 0) {
+    return true;
   }
 
   return allowedDomains.some((allowedDomain) => {
