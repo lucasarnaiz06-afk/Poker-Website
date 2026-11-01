@@ -71,6 +71,8 @@ export type TableDeps = {
   /** Tests: fixed deck order per hand. */
   deckProvider?: (handNumber: number) => string[] | null;
   onSummaryChanged?: (tableId: string) => void;
+  /** A close the host asked for during a hand has finished (stacks refunded) after that hand. */
+  onHostClosed?: (tableId: string) => Promise<void> | void;
   logger?: (message: string, error?: unknown) => void;
 };
 
@@ -129,6 +131,8 @@ export class Table {
   started: boolean;
   closing = false;
   closed = false;
+  /** The host closed the table during a hand: close once it is settled. */
+  closeAfterHand = false;
   nextHandAt: number | null = null;
   nextHandTimer: TimerHandle | null = null;
   version = 0;
@@ -676,7 +680,7 @@ export class Table {
   }
 
   maybeScheduleNextHand() {
-    if (this.closing || this.closed || this.isLive() || this.nextHandTimer) return;
+    if (this.closing || this.closed || this.closeAfterHand || this.isLive() || this.nextHandTimer) return;
     if (!this.started) return;
     if (this.canDealCount() < 2) {
       this.nextHandAt = null;
@@ -844,27 +848,31 @@ export class Table {
     const activeSeats = active.map((s) => s.seat).sort((a, b) => a - b);
     const button = this.buttonSeat === null ? activeSeats[0]! : nextSeat(activeSeats, this.buttonSeat);
     const players = [...active];
-    const extraBlindIds: string[] = [];
-    for (const candidate of waiting.sort((a, b) => a.seat - b.seat)) {
-      const seats = [...players, candidate].map((s) => s.seat);
-      const positions = computePositions(seats, button);
+    // Clockwise from the button, so a later seat can't take the big blind from one already let in for it.
+    const clockwise = (seat: number) => (seat > button ? seat - button : seat - button + 1000);
+    const pending = waiting.sort((a, b) => clockwise(a.seat) - clockwise(b.seat));
+    for (const candidate of [...pending]) {
+      const positions = computePositions([...players, candidate].map((s) => s.seat), button);
       if (positions.bigBlindSeat === candidate.seat) {
         players.push(candidate);
-      } else if (candidate.postNow) {
-        players.push(candidate);
-        if (positions.smallBlindSeat !== candidate.seat) extraBlindIds.push(candidate.userId);
+        pending.splice(pending.indexOf(candidate), 1);
       }
     }
-    // Waiting players can shift the blinds: only keep extra blinds for players not in the blinds now.
-    const finalPositions = computePositions(
+    // Posting now is only allowed where it doesn't move the blinds: otherwise a player already in the hand
+    // would post the big blind twice in a row or skip it. Those players wait until the blinds pass them.
+    const blinds = computePositions(
       players.map((s) => s.seat),
       button,
     );
-    const finalExtra = extraBlindIds.filter((id) => {
-      const seat = players.find((p) => p.userId === id)!.seat;
-      return seat !== finalPositions.smallBlindSeat && seat !== finalPositions.bigBlindSeat;
-    });
-    return { players, button, extraBlindIds: finalExtra };
+    const extraBlindIds: string[] = [];
+    for (const candidate of pending) {
+      if (!candidate.postNow) continue;
+      const positions = computePositions([...players, candidate].map((s) => s.seat), button);
+      if (positions.smallBlindSeat !== blinds.smallBlindSeat || positions.bigBlindSeat !== blinds.bigBlindSeat) continue;
+      players.push(candidate);
+      extraBlindIds.push(candidate.userId);
+    }
+    return { players, button, extraBlindIds };
   }
 
   action(userId: string, handId: string, type: ActionType, amount?: number): Promise<void> {
@@ -1080,8 +1088,14 @@ export class Table {
     const now = this.now();
     hand.completedAt = now;
 
+    // Ending stacks plus anything credited to the seat during the hand (a nit penalty paid by a player who
+    // left mid-hand): the seat still holds the pre-hand stack plus those credits.
     const stacks = new Map<string, number>();
-    for (const player of summary.players) stacks.set(player.id, player.endingStack);
+    for (const player of summary.players) {
+      const seat = this.seatOf(player.id);
+      const credited = seat ? seat.stack - player.startingStack : 0;
+      stacks.set(player.id, player.endingStack + credited);
+    }
     const transfers: Array<Transfer & { reason: SidePayment["reason"] }> = [];
 
     // 7-2 bounty
@@ -1269,6 +1283,11 @@ export class Table {
           });
         }
       }
+    }
+    if (this.closeAfterHand) {
+      await this.shutdownNow("The host closed the table");
+      await this.deps.onHostClosed?.(this.id);
+      return;
     }
     this.maybeScheduleNextHand();
     this.broadcast(null);
@@ -1602,11 +1621,23 @@ export class Table {
   // Closing / shutdown
   // ---------------------------------------------------------------------------------------------
 
-  /** Host closes the table: void any hand in progress and refund every stack. */
-  close(userId: string): Promise<void> {
+  /**
+   * Host closes the table and every stack is refunded. A hand in progress is played out first (voiding it
+   * would let a host who is behind cancel it), so this returns false and the table closes after the hand.
+   */
+  close(userId: string): Promise<boolean> {
     return this.run(async () => {
       if (userId !== this.record.hostUserId) fail("NOT_HOST", "Only the host can close the table.");
+      if (this.isLive()) {
+        if (!this.closeAfterHand) {
+          this.closeAfterHand = true;
+          this.addLog("The host is closing the table after this hand", "system");
+          this.broadcast(null);
+        }
+        return false;
+      }
       await this.shutdownNow("The host closed the table");
+      return true;
     });
   }
 

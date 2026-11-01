@@ -30,14 +30,34 @@ export async function connectAs(player: Player) {
   return { socket, emit, close: () => socket.close() };
 }
 
-/** Host closes the table over the socket API (teardown only; tests use the "Close table" menu item). */
-export async function closeTableAs(host: Player, tableId: string) {
-  const client = await connectAs(host);
+/**
+ * Host closes the table over the socket API (teardown only; tests use the "Close table" menu item). A hand in
+ * progress is played out before the table closes, so every player checks or folds whenever it is their turn.
+ */
+export async function closeTableAs(host: Player, tableId: string, players: Player[] = []) {
+  const clients = [await connectAs(host), ...(await Promise.all(players.filter((p) => p !== host).map(connectAs)))];
   try {
-    const joined = await client.emit("table:join", { tableId });
+    const hostClient = clients[0]!;
+    const closed = new Promise<void>((resolve) => {
+      hostClient.socket.on("table:state", (view) => {
+        if (view.status === "CLOSED") resolve();
+      });
+    });
+    for (const client of clients) {
+      client.socket.on("table:state", (view) => {
+        const legal = view.viewer.legalActions;
+        if (!view.hand || !legal) return;
+        const type = legal.canCheck ? "check" : "fold";
+        client.emit("table:action", { tableId, handId: view.hand.handId, type }).catch(() => undefined);
+      });
+    }
+    const joined = await hostClient.emit("table:join", { tableId });
     if (!joined.ok) return joined;
-    return await client.emit("table:close", { tableId });
+    for (const client of clients.slice(1)) await client.emit("table:join", { tableId }).catch(() => undefined);
+    const res = await hostClient.emit("table:close", { tableId });
+    if (res.ok) await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 60_000))]);
+    return res;
   } finally {
-    client.close();
+    for (const client of clients) client.close();
   }
 }

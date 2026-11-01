@@ -99,8 +99,12 @@ test("stand mid-hand, disconnect/reconnect, chat + emotes, host closes the table
   const closeDialog = a!.page.getByRole("dialog", { name: "Close this table?" });
   await expect(closeDialog).toBeVisible();
   await closeDialog.getByRole("button", { name: "Close table" }).click();
-  // The host lands back in the lobby.
-  await a!.page.waitForURL(/\/lobby(\?.*)?$/, { timeout: 15_000 });
+  // Between hands the host lands back in the lobby; during a hand the table closes once it is played out.
+  const deferred = await Promise.race([
+    a!.page.waitForURL(/\/lobby(\?.*)?$/, { timeout: 15_000 }).then(() => false),
+    a!.page.getByText("Closing after this hand").first().waitFor({ timeout: 15_000 }).then(() => true),
+  ]);
+  if (deferred && sa.spy.latest()?.status !== "CLOSED") await playHandWith([sa, sb2], () => "check");
   await sa.spy.waitFor("table closed", (v) => (v.status === "CLOSED" || v.seats.length === 0 ? v : null), 15_000).catch(() => null);
   const audit = await chipAudit([a!.username, b!.username, c!.username]);
   expect(audit.onTables).toBe(0);

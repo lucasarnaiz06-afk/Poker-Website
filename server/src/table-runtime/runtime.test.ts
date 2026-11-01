@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SerialQueue } from "./serial-queue";
-import { createHarness, deckFor, TABLE_ID } from "./test-harness";
+import { createHarness, deckFor, TABLE_ID, type Harness } from "./test-harness";
 
 describe("SerialQueue / table actor", () => {
   it("never interleaves tasks across awaits", async () => {
@@ -357,26 +357,45 @@ describe("hands", () => {
     await expect(off.runtime.chat("u1", TABLE_ID, "hi", undefined)).rejects.toMatchObject({ code: "CHAT_DISABLED" });
   });
 
-  it("host closes the table: hand voided, every stack refunded", async () => {
+  it("host closes the table between hands: every stack refunded at once", async () => {
+    const h = createHarness();
+    await h.seat(["u1", "u2", "u3"]);
+    await h.untilHand();
+    await h.passiveToEnd();
+    await h.runtime.close("u1", TABLE_ID);
+    expect(h.store.totalChips()).toBe(300_000);
+    expect([...h.store.balances.values()].reduce((sum, b) => sum + b, 0)).toBe(300_000);
+    expect(h.store.tables.get(TABLE_ID)!.closed).toBe(true);
+    expect(h.runtime.tables.has(TABLE_ID)).toBe(false);
+  });
+
+  it("host closes mid-hand: the hand is played out (no voiding a losing hand), then the table closes", async () => {
     const h = createHarness();
     await h.seat(["u1", "u2", "u3"]);
     await h.untilHand();
     await h.act(h.toAct()!, "raise", 100);
     await h.runtime.close("u1", TABLE_ID);
-    expect(h.store.totalChips()).toBe(300_000);
-    for (const id of ["u1", "u2", "u3"]) expect(h.store.balances.get(id)).toBe(100_000);
+    expect(h.table().isLive()).toBe(true);
+    expect(h.store.tables.get(TABLE_ID)!.closed).toBe(false);
+    await h.passiveToEnd();
+    expect(h.store.hands).toHaveLength(1);
     expect(h.store.tables.get(TABLE_ID)!.closed).toBe(true);
     expect(h.runtime.tables.has(TABLE_ID)).toBe(false);
+    const balances = ["u1", "u2", "u3"].map((id) => h.store.balances.get(id)!);
+    expect(balances.reduce((sum, b) => sum + b, 0)).toBe(300_000);
+    expect(balances.some((b) => b !== 100_000)).toBe(true); // the hand's result stands
+    expect(h.store.totalChips()).toBe(300_000);
   });
 
-  it("host closes from the lobby (closeAsHost): loaded table refunds stacks; others are rejected", async () => {
+  it("host closes from the lobby (closeAsHost): loaded table refunds stacks after the hand; others are rejected", async () => {
     const h = createHarness();
     await h.seat(["u1", "u2"]);
     await h.untilHand();
     await expect(h.runtime.closeAsHost("u2", TABLE_ID)).rejects.toMatchObject({ code: "NOT_HOST" });
     await h.runtime.closeAsHost("u1", TABLE_ID);
-    expect(h.store.balances.get("u1")).toBe(100_000);
-    expect(h.store.balances.get("u2")).toBe(100_000);
+    expect(h.store.tables.get(TABLE_ID)!.closed).toBe(false);
+    await h.passiveToEnd();
+    expect(h.store.balances.get("u1")! + h.store.balances.get("u2")!).toBe(200_000);
     expect(h.store.tables.get(TABLE_ID)!.closed).toBe(true);
     await expect(h.runtime.closeAsHost("u1", TABLE_ID)).rejects.toMatchObject({ code: "TABLE_NOT_FOUND" });
   });
@@ -389,6 +408,60 @@ describe("hands", () => {
     await h.runtime.closeAsHost("u1", TABLE_ID);
     expect(h.store.tables.get(TABLE_ID)!.closed).toBe(true);
     expect(h.runtime.tables.has(TABLE_ID)).toBe(false);
+  });
+});
+
+describe("waiting players and the blinds", () => {
+  async function sitAt(h: Harness, seats: Record<string, number>, postNow = false) {
+    for (const [id, seat] of Object.entries(seats)) {
+      await h.join(id);
+      await h.runtime.sit(id, TABLE_ID, seat, 1000, postNow);
+    }
+  }
+  const dealtSeats = (h: Harness) => h.table().hand!.dealt.map((d) => d.seat).sort((a, b) => a - b);
+  const posts = (h: Harness) =>
+    h
+      .table()
+      .hand!.engine.events.filter((e) => e.type === "POST")
+      .map((e) => `${e.seat}:${e.kind}`);
+
+  it("posting now never makes a player post the big blind twice in a row", async () => {
+    const h = createHarness();
+    await sitAt(h, { u1: 1, u3: 3, u5: 5 });
+    await h.untilHand();
+    expect(posts(h)).toEqual(["3:SMALL_BLIND", "5:BIG_BLIND"]); // button 1
+    await sitAt(h, { u4: 4 }, true);
+    await h.passiveToEnd();
+
+    // Button 3: seat 4 sits between the button and the blinds, so it waits instead of shifting them.
+    await h.untilHand();
+    expect(dealtSeats(h)).toEqual([1, 3, 5]);
+    expect(posts(h)).toEqual(["5:SMALL_BLIND", "1:BIG_BLIND"]);
+    await h.passiveToEnd();
+
+    // Button 5: seat 4 is past the blinds and posts a live big blind.
+    await h.untilHand();
+    expect(dealtSeats(h)).toEqual([1, 3, 4, 5]);
+    expect(posts(h)).toEqual(["1:SMALL_BLIND", "3:BIG_BLIND", "4:EXTRA_BLIND"]);
+  });
+
+  it("two players waiting for the big blind: only the one it reaches is dealt in", async () => {
+    const h = createHarness();
+    await sitAt(h, { u2: 2, u6: 6, u8: 8 });
+    await h.untilHand(); // button 2, blinds 6 and 8
+    await sitAt(h, { u1: 1, u9: 9 });
+    await h.passiveToEnd();
+
+    // Button 6: the big blind moves to seat 9. Seat 1 must not be dealt in without posting.
+    await h.untilHand();
+    expect(dealtSeats(h)).toEqual([2, 6, 8, 9]);
+    expect(posts(h)).toEqual(["8:SMALL_BLIND", "9:BIG_BLIND"]);
+    await h.passiveToEnd();
+
+    // Button 8: the big blind reaches seat 1.
+    await h.untilHand();
+    expect(dealtSeats(h)).toEqual([1, 2, 6, 8, 9]);
+    expect(posts(h)).toEqual(["9:SMALL_BLIND", "1:BIG_BLIND"]);
   });
 });
 

@@ -302,6 +302,37 @@ describe("nit game", () => {
     expect(h.view("u1").sideGames.nitGame.nitUserIds).toEqual([]);
     expect(h.store.totalChips()).toBe(300_000);
   });
+
+  it("a nit who leaves during a hand they are not dealt into: the penalty survives settlement", async () => {
+    const board = ["Kd", "Qc", "7h", "6s", "Jd"];
+    const h = createHarness({
+      settings: { autoStart: false, nitGame: { enabled: true, penaltyBB: 5, voteRule: "unanimous" } },
+      decks: [
+        deckBySeat(1, { 1: ["As", "Ah"], 2: JUNK[2]!, 3: JUNK[3]!, 4: ["2h", "3s"] }, board),
+        deckBySeat(2, { 1: JUNK[1]!, 2: JUNK[2]!, 3: ["As", "Ah"] }, board),
+      ],
+    });
+    for (const [i, id] of ["u1", "u2", "u3", "u4"].entries()) {
+      await h.join(id);
+      await h.runtime.sit(id, TABLE_ID, i + 1, 1000);
+    }
+    await passVote(h, "NIT_GAME", "START", ["u1", "u2", "u3", "u4"]);
+    await h.runtime.start("u1", TABLE_ID);
+    await h.untilHand();
+    await h.passiveToEnd(); // u1 safe; nits u2, u3, u4
+    await h.runtime.sitOut("u4", TABLE_ID, true);
+    await h.untilHand();
+    expect(h.table().hand!.dealt.map((d) => d.userId)).not.toContain("u4");
+
+    const u4Stack = h.table().seatOf("u4")!.stack;
+    await h.runtime.stand("u4", TABLE_ID); // pays 50 to each of u1, u2, u3 while their hand runs
+    expect(h.store.balances.get("u4")).toBe(100_000 - 1000 + u4Stack - 150);
+    await h.passiveToEnd();
+
+    const seated = ["u1", "u2", "u3"].reduce((sum, id) => sum + h.table().seatOf(id)!.stack, 0);
+    expect(seated).toBe(4000 - (u4Stack - 150));
+    expect(h.store.totalChips()).toBe(400_000);
+  });
 });
 
 describe("7-2 bounty", () => {

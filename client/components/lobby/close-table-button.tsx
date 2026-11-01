@@ -25,7 +25,11 @@ export function CloseTableButton({ tableId, name }: { tableId: string; name: str
       }
 
       setOpen(false);
-      toast({ title: "Table closed", description: `${name} is closed. Every stack went back to its wallet.`, tone: "success" });
+      toast({
+        title: "Table closing",
+        description: `${name} closes once any hand in progress ends. Every stack goes back to its wallet.`,
+        tone: "success",
+      });
       router.refresh();
     });
   }
@@ -59,7 +63,7 @@ export function CloseTableButton({ tableId, name }: { tableId: string; name: str
           <li>
             <span className="font-medium text-fg">{name}</span> closes for everyone.
           </li>
-          <li>A hand in progress is cancelled and every player&apos;s chips go back to their wallet.</li>
+          <li>A hand in progress is played out first, then every player&apos;s chips go back to their wallet.</li>
           <li>This can&apos;t be undone.</li>
         </ul>
         {error ? (

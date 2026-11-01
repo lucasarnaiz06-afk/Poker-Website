@@ -228,7 +228,7 @@ export type ClientToServerEvents = {
   "table:sitOut": (p: { tableId: string; sitOut: boolean }, ack: (r: Ack) => void) => void;
   "table:rebuy": (p: { tableId: string; amount: number }, ack: (r: Ack) => void) => void;
   "table:start": (p: { tableId: string }, ack: (r: Ack) => void) => void;
-  // Additive: host closes the table; a hand in progress is voided and every stack goes back to its wallet.
+  // Additive: host closes the table; a hand in progress is played out first, then every stack goes back to its wallet.
   "table:close": (p: { tableId: string }, ack: (r: Ack) => void) => void;
   "table:action": (
     p: { tableId: string; handId: string; type: ActionType; amount?: number },

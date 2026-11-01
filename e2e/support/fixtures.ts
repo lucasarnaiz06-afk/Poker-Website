@@ -49,7 +49,7 @@ export const test = base.extend<{ game: Game }>({
     await use(game);
 
     for (const { host, tableId } of tables) {
-      const res = await closeTableAs(host, tableId).catch((error: unknown) => ({ ok: false, message: String(error) }));
+      const res = await closeTableAs(host, tableId, players).catch((error: unknown) => ({ ok: false, message: String(error) }));
       if (!res.ok && !/not found|closed/i.test(JSON.stringify(res))) {
         testInfo.annotations.push({ type: "cleanup", description: `close ${tableId}: ${JSON.stringify(res)}` });
       }

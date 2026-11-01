@@ -1,5 +1,7 @@
 # Poker Platform
 
+[![CI](https://github.com/lucasarnaiz06-afk/Poker-Website/actions/workflows/ci.yml/badge.svg)](https://github.com/lucasarnaiz06-afk/Poker-Website/actions/workflows/ci.yml)
+
 Multiplayer No-Limit Hold'em and Pot-Limit Omaha with play-money chips: a Next.js client, a server-authoritative
 Socket.io game server and PostgreSQL. Real-money play is out of scope.
 
@@ -10,10 +12,12 @@ Socket.io game server and PostgreSQL. Real-money play is out of scope.
   with an optional double board. Tested with rule fixtures, adversarial cases and a 6,000-hand fuzz test.
 - **Game server** (`server/src/table-runtime`): one actor per table with a sequential command queue. The client only
   sends intents. Other players' hole cards and undealt cards never leave the server.
-- **Verifiable shuffle**: `crypto.randomInt` Fisher-Yates. Each hand publishes a commitment over salted per-card
-  hashes, and after the hand every viewer gets a proof for the cards they were allowed to see.
+- **Tamper-evident deck**: `crypto.randomInt` Fisher-Yates. Each hand publishes a commitment over salted per-card
+  hashes, and after the hand every viewer gets a proof for the cards they were allowed to see, so they can check the
+  deck wasn't changed mid-hand. It does not prove the shuffle itself was fair: that would need player-contributed
+  entropy.
 - **Chip ledger**: integer chips, every wallet/table movement in a DB transaction, balances can't go negative, and the
-  end-to-end tests assert that chips are conserved.
+  runtime and end-to-end tests assert that chips are conserved, including side-game payments.
 - **Side games** started by table vote: bomb pots, nit game, 7-2 bounty, run it twice.
 - **Hand history and stats**: hand replayer, PokerStars-format export, VPIP/PFR and other player stats, all-in EV,
   leaderboards, and a browser equity/range calculator. Rule-based bots with five playing styles seed realistic hands
@@ -138,8 +142,14 @@ Both apps therefore ignore them by default; configure them to match your deploym
 ### Tests
 
 ```bash
-npm test --workspace packages/shared   # wallet, accounts, auth (uses the poker_platform_test database)
+npm run test:engine                    # engine rules, evaluator, fuzz (no database needed)
+npm test --workspace server            # table runtime, side games, sockets (in-memory ports)
+npm test --workspace client            # client helpers
+npm test --workspace packages/shared   # wallet, accounts, auth, hands, stats (uses the poker_platform_test database)
+npm run e2e                            # Playwright against the running dev stack
 ```
+
+CI runs typecheck, lint and every unit suite above (with a Postgres service) on each push.
 
 The test database (`poker_platform_test` on the same server, or `TEST_DATABASE_URL`) is created and migrated
 automatically; tests refuse to run against a database whose name doesn't end in `_test`.
@@ -163,3 +173,7 @@ Verify the SMTP login before testing sign-in:
 ```bash
 npm run smtp:verify
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).

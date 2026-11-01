@@ -83,12 +83,18 @@ export function TopBar({
     if (res.ok) setConfirmStand(false);
   };
 
+  const handLive = Boolean(view.hand && view.hand.phase !== "COMPLETE");
+
   const closeTable = async () => {
     setBusy(true);
     const res = await commands.close();
     setBusy(false);
     if (!res.ok) return;
     setConfirmClose(false);
+    if (handLive) {
+      toast({ title: "Closing after this hand", description: "Every stack goes back to its wallet once the hand ends.", tone: "default" });
+      return;
+    }
     toast({ title: "Table closed", description: "Every stack went back to its wallet.", tone: "success" });
     router.push(lobbyHref);
   };
@@ -255,7 +261,7 @@ export function TopBar({
         >
           <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-muted">
             <li>The table closes for everyone.</li>
-            {view.hand && view.hand.phase !== "COMPLETE" && <li>The hand in progress is cancelled.</li>}
+            {handLive && <li>The hand in progress is played out first.</li>}
             <li>Every player&apos;s chips go back to their wallet.</li>
           </ul>
         </DialogContent>

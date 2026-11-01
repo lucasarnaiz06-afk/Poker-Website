@@ -147,7 +147,7 @@ export type CloseTableResult = { ok: true } | { ok: false; message: string };
 
 /**
  * Host closes one of their tables from the lobby. Goes through the game server (never straight to the DB) so
- * any hand in progress is voided and every stack is refunded to its wallet first.
+ * any hand in progress is played out and every stack is refunded to its wallet.
  */
 export async function closeTableAction(tableId: string): Promise<CloseTableResult> {
   await requireCurrentSession();

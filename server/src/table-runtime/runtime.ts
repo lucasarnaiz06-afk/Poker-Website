@@ -81,6 +81,7 @@ export class TableRuntime {
       timings: this.deps.timings,
       deckProvider: this.deps.deckProvider ? (n) => this.deps.deckProvider!(record.id, n) : undefined,
       onSummaryChanged: () => this.lobbyChanged(),
+      onHostClosed: (tableId) => this.finishClose(tableId),
       logger: this.deps.logger,
     });
   }
@@ -189,7 +190,7 @@ export class TableRuntime {
   /**
    * Host closes a table from outside it (the lobby's "Your tables"). A table this process hasn't loaded holds
    * no live seats (a fresh actor starts empty and leftover stacks are refunded by boot recovery), so it is
-   * loaded only to run the same close path: void, refund every stack, mark the lobby closed.
+   * loaded only to run the same close path: refund every stack (after any hand in progress), mark the lobby closed.
    */
   async closeAsHost(userId: string, tableId: string) {
     if (!this.tables.has(tableId)) {
@@ -200,10 +201,17 @@ export class TableRuntime {
     await this.closeTable(userId, await this.getTable(tableId));
   }
 
+  /** Closes now, or after the hand in progress (the table then calls finishClose itself). */
   private async closeTable(userId: string, table: Table) {
-    const tableId = table.id;
-    await table.close(userId);
+    const closedNow = await table.close(userId);
+    if (!closedNow) return;
     if (!table.closed) fail("CLOSE_INCOMPLETE", "Some stacks could not be refunded yet; they will be on restart.");
+    await this.finishClose(table.id);
+  }
+
+  private async finishClose(tableId: string) {
+    // Stacks that could not be refunded keep the table loaded; boot recovery refunds them.
+    if (!this.tables.get(tableId)?.closed) return;
     await this.deps.lobby.closeTable(tableId);
     this.tables.delete(tableId);
     this.lobbyChanged();
